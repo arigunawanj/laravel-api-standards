@@ -22,7 +22,7 @@ HEADER='<!--
 
 {
   echo "$HEADER"
-  awk 'BEGIN{c=0} /^---$/{c++; next} c>=2{print}' SKILL.md
+  awk 'BEGIN{c=0} /^---$/{c++; next} c>=2{print}' skills/laravel-ari-standards/SKILL.md
 } > AGENTS.md
 
 echo "AGENTS.md berhasil disinkronkan dari SKILL.md"

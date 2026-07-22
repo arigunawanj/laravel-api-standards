@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 #
-# Installer untuk laravel-ari-standards
+# Installer FALLBACK untuk laravel-ari-standards.
+#
+# Kalau kamu pakai Claude Code versi baru, install lewat /plugin jauh lebih
+# simpel (2 baris, langsung dari dalam Claude Code, tanpa curl/bash):
+#
+#   /plugin marketplace add <GITHUB_USERNAME>/laravel-ari-standards
+#   /plugin install laravel-ari-standards@laravel-ari-standards
+#
+# Script ini masih berguna untuk: agent selain Claude Code (Cursor/Cline/dll
+# lewat AGENTS.md), atau Claude Code versi lama yang belum punya /plugin.
 #
 # Pemakaian:
 #   # Install ke project Laravel yang sedang aktif (folder saat ini)
@@ -39,7 +48,7 @@ done
 # Kalau tidak (mode curl | bash), download dari GitHub raw.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || true)"
 LOCAL_MODE=false
-if [[ -n "${SCRIPT_DIR:-}" && -f "${SCRIPT_DIR}/SKILL.md" ]]; then
+if [[ -n "${SCRIPT_DIR:-}" && -f "${SCRIPT_DIR}/skills/${SKILL_NAME}/SKILL.md" ]]; then
   LOCAL_MODE=true
 fi
 
@@ -61,7 +70,7 @@ echo
 if [[ "$MODE" == "global" ]]; then
   # Global: kepakai otomatis di SEMUA project Claude Code, tanpa install ulang.
   DEST="${HOME}/.claude/skills/${SKILL_NAME}/SKILL.md"
-  fetch_file "SKILL.md" "$DEST"
+  fetch_file "skills/${SKILL_NAME}/SKILL.md" "$DEST"
   echo
   echo "Selesai. Skill terpasang global di ~/.claude/skills/${SKILL_NAME}/"
   echo "Claude Code akan otomatis konsultasi skill ini di project Laravel manapun."
@@ -69,7 +78,7 @@ else
   # Project: pasang Skill Claude Code + AGENTS.md universal + pointer CLAUDE.md
   cd "$TARGET_DIR"
 
-  fetch_file "SKILL.md" ".claude/skills/${SKILL_NAME}/SKILL.md"
+  fetch_file "skills/${SKILL_NAME}/SKILL.md" ".claude/skills/${SKILL_NAME}/SKILL.md"
   fetch_file "AGENTS.md" "AGENTS.md"
 
   if [[ -f "CLAUDE.md" ]]; then

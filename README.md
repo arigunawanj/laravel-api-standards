@@ -1,95 +1,93 @@
 # laravel-ari-standards
 
 Standar arsitektur, naming convention, dan struktur folder Laravel API milik Ari —
-dipaketkan sebagai **Skill** yang bisa dipasang sekali per project (atau sekali
-secara global) dan otomatis dipakai oleh AI coding agent, tanpa copy-paste
-dokumentasi berulang-ulang tiap bikin project baru.
+dipaketkan sebagai **Claude Code Plugin** sekaligus **Skill universal**, supaya
+tinggal 1-2 command tiap bikin project baru, tidak copy-paste dokumentasi lagi.
 
 Mencakup: multi-tenant (company/plan/RBAC), versioning API, Form Request wajib,
 response macro standar, anti N+1, security/injection prevention, token security
 Sanctum, naming tabel (`m_`, `t_`, `_det`), naming model (`...Model`), dan struktur
 folder per fitur.
 
-## Kepakai di agent apa saja
+## Install (Claude Code — paling simpel)
 
-| Agent | File yang dipakai |
-|---|---|
-| Claude Code / Claude.ai / Cowork | `.claude/skills/laravel-ari-standards/SKILL.md` (native Skill, auto-trigger dari deskripsi) |
-| Cursor, Cline, Windsurf, Aider, OpenAI Codex CLI, dll | `AGENTS.md` di root project (konvensi universal yang didukung agent-agent tersebut) |
-| Claude Code (fallback tanpa trigger) | `CLAUDE.md` — otomatis dibaca tiap sesi, cukup jadi pointer ke `AGENTS.md` |
+Buka Claude Code di mana saja, lalu jalankan dua command ini:
 
-`AGENTS.md` digenerate otomatis dari isi `SKILL.md` (lihat `scripts/sync-agents.sh`)
-supaya kamu cuma perlu maintain **satu** sumber (`SKILL.md`), tidak dua dokumen
-yang bisa beda-beda.
+```
+/plugin marketplace add <GITHUB_USERNAME>/laravel-ari-standards
+/plugin install laravel-ari-standards@laravel-ari-standards
+```
 
-## Install
+Ganti `<GITHUB_USERNAME>` dengan username GitHub kamu. Sekali install, plugin ini
+otomatis aktif di **semua project** kamu (pilih "User scope" saat diminta) — tidak
+perlu install ulang tiap bikin project Laravel baru.
 
-### A. Sekali pasang per project (rekomendasi kalau standar berbeda per klien)
+Setelah install, jalankan `/reload-plugins` supaya langsung aktif di sesi
+berjalan. Claude Code akan otomatis mengonsultasikan skill ini setiap kali kamu
+membuat/mengubah model, controller, migration, request, atau resource Laravel.
 
-Jalankan di root project Laravel yang baru dibuat:
+Update ke versi terbaru kalau `SKILL.md` diedit:
+```
+/plugin marketplace update laravel-ari-standards
+/plugin update laravel-ari-standards
+```
+
+## Install (agent selain Claude Code — Cursor, Cline, Windsurf, Aider, Codex, dll)
+
+Agent-agent ini belum punya sistem plugin seperti Claude Code, jadi pakai file
+`AGENTS.md` (konvensi universal yang mereka baca otomatis dari root project):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/<GITHUB_USERNAME>/laravel-ari-standards/main/install.sh | bash
 ```
 
-Ini akan membuat:
-```
-.claude/skills/laravel-ari-standards/SKILL.md   # dipakai Claude Code
-AGENTS.md                                        # dipakai agent lain
-CLAUDE.md                                        # pointer, auto-load Claude Code
-```
-
-### B. Install sekali, kepakai otomatis di SEMUA project (rekomendasi kalau standar selalu sama)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/<GITHUB_USERNAME>/laravel-ari-standards/main/install.sh | bash -s -- --global
-```
-
-Ini memasang ke `~/.claude/skills/laravel-ari-standards/SKILL.md`. Claude Code akan
-otomatis mengonsultasikan skill ini di project Laravel manapun tanpa perlu
-install ulang atau taruh file apapun di tiap project.
-
-> Catatan: mode global hanya berlaku untuk Claude Code. Untuk Cursor/Cline/dll
-> tetap perlu `AGENTS.md` per project (jalankan mode A), karena tool-tool
-> tersebut belum punya mekanisme skill global lintas-project.
-
-## Cara publish repo ini ke GitHub kamu sendiri
-
-1. Buat repo baru di GitHub, misal `laravel-ari-standards` (boleh public/private —
-   kalau private, `install.sh` versi `curl` tidak akan bisa akses tanpa token,
-   jadi disarankan **public** khusus untuk repo standar seperti ini).
-2. Di folder ini, jalankan:
-   ```bash
-   git init
-   git add .
-   git commit -m "init: laravel-ari-standards skill"
-   git branch -M main
-   git remote add origin https://github.com/<GITHUB_USERNAME>/laravel-ari-standards.git
-   git push -u origin main
-   ```
-3. Buka `install.sh` dan `README.md`, ganti semua `<GITHUB_USERNAME>` dengan
-   username GitHub kamu, lalu commit ulang.
-4. Tes dari project lain:
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/<GITHUB_USERNAME>/laravel-ari-standards/main/install.sh | bash
-   ```
-
-## Update standar di kemudian hari
-
-1. Edit `SKILL.md` (source of truth).
-2. Jalankan `./scripts/sync-agents.sh` supaya `AGENTS.md` ikut update.
-3. Commit & push.
-4. Project lama tinggal jalankan ulang perintah install di atas untuk narik versi
-   terbaru (script aman dijalankan berkali-kali / idempotent).
+Jalankan perintah ini di root project Laravel yang baru dibuat. Ini akan
+menyalin `AGENTS.md` ke root project + `SKILL.md` ke `.claude/skills/` (sebagai
+fallback kalau `/plugin` belum tersedia di versi Claude Code kamu).
 
 ## Struktur repo
 
 ```
 laravel-ari-standards/
-├── SKILL.md              # source of truth: standar lengkap (format Claude Skill)
-├── AGENTS.md              # auto-generated dari SKILL.md, untuk agent non-Claude
-├── CLAUDE.md               # pointer pendek, auto-dibaca Claude Code
-├── install.sh               # installer (curl | bash), mode --project / --global
+├── .claude-plugin/
+│   ├── plugin.json          # manifest plugin
+│   └── marketplace.json      # katalog marketplace (repo ini jadi marketplace-nya sendiri)
+├── skills/
+│   └── laravel-ari-standards/
+│       └── SKILL.md            # source of truth: standar lengkap
+├── AGENTS.md                     # auto-generated dari SKILL.md, untuk agent non-Claude
+├── CLAUDE.md                      # pointer pendek (dipakai mode fallback install.sh)
+├── install.sh                      # installer fallback (curl | bash)
 └── scripts/
-    └── sync-agents.sh       # regenerate AGENTS.md dari SKILL.md
+    └── sync-agents.sh                # regenerate AGENTS.md dari SKILL.md
 ```
+
+## Cara publish ke GitHub kamu
+
+1. Buat repo baru di GitHub: `laravel-ari-standards`, **public** (marketplace
+   plugin butuh akses publik supaya `/plugin marketplace add` bisa fetch).
+2. Di folder ini:
+   ```bash
+   git init
+   git add .
+   git commit -m "init: laravel-ari-standards plugin"
+   git branch -M main
+   git remote add origin https://github.com/<GITHUB_USERNAME>/laravel-ari-standards.git
+   git push -u origin main
+   ```
+3. Ganti semua `<GITHUB_USERNAME>` di README.md dan install.sh dengan username
+   GitHub kamu, commit ulang.
+4. Tes dari Claude Code (di project manapun):
+   ```
+   /plugin marketplace add <GITHUB_USERNAME>/laravel-ari-standards
+   /plugin install laravel-ari-standards@laravel-ari-standards
+   ```
+
+## Update standar di kemudian hari
+
+1. Edit `skills/laravel-ari-standards/SKILL.md` (source of truth).
+2. Jalankan `./scripts/sync-agents.sh` supaya `AGENTS.md` ikut update.
+3. Commit & push.
+4. User plugin tinggal `/plugin marketplace update laravel-ari-standards` lalu
+   `/plugin update laravel-ari-standards`. User `install.sh` tinggal jalankan
+   ulang perintah install (idempotent).
