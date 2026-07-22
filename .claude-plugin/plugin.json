@@ -1,0 +1,8 @@
+{
+  "name": "laravel-ari-standards",
+  "description": "Standar arsitektur, naming convention, dan struktur folder Laravel API milik Ari (multi-tenant, RBAC, response macro, security, versioning API, dll).",
+  "version": "1.0.0",
+  "author": {
+    "name": "Ari"
+  }
+}
