@@ -1,17 +1,17 @@
 {
-  "name": "laravel-ari-standards",
+  "name": "laravel-api-standards",
   "owner": {
     "name": "Ari"
   },
   "metadata": {
-    "description": "Marketplace pribadi Ari untuk standar Laravel API",
+    "description": "Marketplace standar Laravel API — naming convention, multi-tenant, RBAC, response macro, security",
     "version": "1.0.0"
   },
   "plugins": [
     {
-      "name": "laravel-ari-standards",
+      "name": "laravel-api-standards",
       "source": "./",
-      "description": "Standar arsitektur, naming convention, dan struktur folder Laravel API milik Ari (multi-tenant, RBAC, response macro, security, versioning API, dll).",
+      "description": "Standar arsitektur, naming convention, dan struktur folder Laravel API (multi-tenant, RBAC, response macro, security, versioning API, dll).",
       "version": "1.0.0"
     }
   ]

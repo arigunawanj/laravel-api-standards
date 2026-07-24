@@ -1,31 +1,31 @@
 #!/usr/bin/env bash
 #
-# Installer FALLBACK untuk laravel-ari-standards.
+# Installer FALLBACK untuk laravel-api-standards.
 #
 # Kalau kamu pakai Claude Code versi baru, install lewat /plugin jauh lebih
 # simpel (2 baris, langsung dari dalam Claude Code, tanpa curl/bash):
 #
-#   /plugin marketplace add <GITHUB_USERNAME>/laravel-ari-standards
-#   /plugin install laravel-ari-standards@laravel-ari-standards
+#   /plugin marketplace add arigunawanj/laravel-api-standards
+#   /plugin install laravel-api-standards@laravel-api-standards
 #
 # Script ini masih berguna untuk: agent selain Claude Code (Cursor/Cline/dll
 # lewat AGENTS.md), atau Claude Code versi lama yang belum punya /plugin.
 #
 # Pemakaian:
 #   # Install ke project Laravel yang sedang aktif (folder saat ini)
-#   curl -fsSL https://raw.githubusercontent.com/<GITHUB_USERNAME>/laravel-ari-standards/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/arigunawanj/laravel-api-standards/main/install.sh | bash
 #
 #   # Install global, otomatis kepakai di SEMUA project Claude Code
-#   curl -fsSL https://raw.githubusercontent.com/<GITHUB_USERNAME>/laravel-ari-standards/main/install.sh | bash -s -- --global
+#   curl -fsSL https://raw.githubusercontent.com/arigunawanj/laravel-api-standards/main/install.sh | bash -s -- --global
 #
-# Ganti <GITHUB_USERNAME> di atas dengan username GitHub kamu setelah repo dipublish.
+# Fork repo ini? Override REPO_SLUG=<username>/<repo> sebelum menjalankan script.
 
 set -euo pipefail
 
-# --- Konfigurasi (edit setelah upload ke GitHub) -----------------------
-REPO_SLUG="${REPO_SLUG:-<GITHUB_USERNAME>/laravel-ari-standards}"
+# --- Konfigurasi ---------------------------------------------------------
+REPO_SLUG="${REPO_SLUG:-arigunawanj/laravel-api-standards}"
 BRANCH="${BRANCH:-main}"
-SKILL_NAME="laravel-ari-standards"
+SKILL_NAME="laravel-api-standards"
 RAW_BASE="https://raw.githubusercontent.com/${REPO_SLUG}/${BRANCH}"
 # -------------------------------------------------------------------------
 
@@ -87,7 +87,7 @@ else
         echo ""
         echo "## Project Standards"
         echo ""
-        echo "Baca dan patuhi \`AGENTS.md\` di root project ini (Laravel Ari Standards)."
+        echo "Baca dan patuhi \`AGENTS.md\` di root project ini (Laravel API Standards)."
       } >> CLAUDE.md
       echo "  -> CLAUDE.md (ditambahkan referensi ke AGENTS.md)"
     else

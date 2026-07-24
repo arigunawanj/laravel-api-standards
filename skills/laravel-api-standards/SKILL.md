@@ -1,6 +1,6 @@
 ---
-name: laravel-ari-standards
-description: Architect, implement, and review Laravel APIs following Ari's specific enterprise standards for multi-tenancy, naming conventions (m_, t_, Model suffix), folder structures, and mandatory audit fields. Use when creating or modifying Laravel models, controllers, migrations, or when performing code reviews to ensure strict adherence to the defined schema.
+name: laravel-api-standards
+description: Architect, implement, and review Laravel APIs following strict enterprise standards for multi-tenancy, naming conventions (m_, t_, Model suffix), folder structures, and mandatory audit fields. Use when creating or modifying Laravel models, controllers, migrations, or when performing code reviews to ensure strict adherence to the defined schema.
 ---
 
 # Dokumentasi Awalan Laravel API (Naming Convention & Struktur Folder)
