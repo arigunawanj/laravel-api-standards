@@ -241,7 +241,7 @@ class EnsureModuleIsActive
         $company = $request->attributes->get('company');
 
         if (! $company?->hasActiveModule($module)) {
-            abort(403, "Modul {$module} tidak aktif untuk paket company ini");
+            abort(403, "Modul {$module} tidak aktif untuk paket company {$company?->nama}. Hubungi admin company untuk mengaktifkan atau upgrade paket");
         }
 
         return $next($request);
@@ -355,6 +355,7 @@ Laravel 11+ tidak lagi memakai `app/Http/Kernel.php`. Alias middleware dan rende
 ```php
 <?php
 
+use App\Helpers\ApiErrorHelpers;
 use App\Http\Middleware\EnsureModuleIsActive;
 use App\Http\Middleware\SetTenantContext;
 use Illuminate\Auth\AuthenticationException;
@@ -389,33 +390,38 @@ return Application::configure(basePath: dirname(__DIR__))
             fn (Request $request) => $request->is('api/*') || $request->expectsJson()
         );
 
+        // Kode referensi error ikut tercatat di log, sama dengan yang dikirim ke client
+        $exceptions->context(fn () => ['error_ref' => ApiErrorHelpers::reference()]);
+
         // Urutan penting: callback pertama yang cocok & mengembalikan response yang dipakai.
 
-        // 1. 401: belum login, token salah, atau token expired
+        // 1. 401: token tidak dikirim / tidak valid / kedaluwarsa
         $exceptions->render(function (AuthenticationException $e, Request $request) {
             if ($request->is('api/*')) {
-                return response()->unauthorized();
+                $message = ApiErrorHelpers::unauthenticated($e, $request);
+
+                return response()->unauthorized([$message], $message);
             }
         });
 
-        // 2. 403 dari middleware permission Spatie (pesan dibuat seragam)
+        // 2. 403 dari middleware permission Spatie, sebutkan izin yang dibutuhkan
         $exceptions->render(function (UnauthorizedException $e, Request $request) {
             if ($request->is('api/*')) {
-                return response()->forbidden(['Anda tidak memiliki akses untuk aksi ini'], 'Forbidden');
+                $message = ApiErrorHelpers::permissionDenied($e);
+
+                return response()->forbidden([$message], $message);
             }
         });
 
-        // 3. Semua HTTP error lain: abort() dari middleware/controller, 403 policy, 404, 405, 409, 429, 503, dst
+        // 3. Semua HTTP error lain: abort() dari middleware/controller, policy, 404, 405, 409, 429, 503, dst
         $exceptions->render(function (HttpExceptionInterface $e, Request $request) {
             if (! $request->is('api/*')) {
                 return null;
             }
 
             $status = $e->getStatusCode();
-
-            // 404/405 bawaan framework membawa nama model/route, jangan diteruskan ke client
-            $message = in_array($status, [404, 405], true) ? '' : $e->getMessage();
-            $args = $message === '' ? [] : [[$message], $message];
+            $message = ApiErrorHelpers::fromHttpException($e, $request);
+            $args = [[$message], $message];
 
             $response = match ($status) {
                 400 => response()->badRequest(...$args),
@@ -426,23 +432,29 @@ return Application::configure(basePath: dirname(__DIR__))
                 409 => response()->conflict(...$args),
                 429 => response()->tooManyRequests(...$args),
                 503 => response()->serviceUnavailable(...$args),
-                default => response()->failed([$message ?: 'Error'], $message, $status),
+                default => response()->failed([$message], $message, $status),
             };
 
             // Pertahankan header seperti Retry-After (429) dan Allow (405)
             return $response->withHeaders($e->getHeaders());
         });
 
-        // 4. Fallback 500 untuk exception yang tidak tertangani (detail hanya saat APP_DEBUG=true)
+        // 4. Fallback 500: pesan aman + kode referensi untuk dilacak di log
         $exceptions->render(function (Throwable $e, Request $request) {
             if (! $request->is('api/*') || $e instanceof ValidationException || $e instanceof HttpResponseException) {
                 return null; // 422 tetap format default Laravel
             }
 
+            $ref = ApiErrorHelpers::reference();
+            $message = "Terjadi kesalahan pada server saat memproses {$request->method()} /{$request->path()}. Kode referensi: {$ref}. Laporkan kode ini ke tim IT";
+
             return response()->internalServerError(
-                ['Terjadi kesalahan pada server'],
-                'Internal Server Error',
-                config('app.debug') ? ['exception' => $e::class, 'detail' => $e->getMessage(), 'file' => $e->getFile().':'.$e->getLine()] : [],
+                [$message],
+                $message,
+                array_filter([
+                    'error_ref' => $ref,
+                    'debug' => config('app.debug') ? ['exception' => $e::class, 'detail' => $e->getMessage(), 'file' => $e->getFile().':'.$e->getLine()] : null,
+                ]),
             );
         });
     })
@@ -453,30 +465,33 @@ Catatan:
 
 * **Semua error dari middleware dan controller keluar dengan format macro yang sama**, termasuk `abort(403, '...')`, 403 dari policy/Gate, `module:`, `tenant`, `permission:`, `throttle:`, 404, 405, 409, 503 (maintenance mode), dan 500.
 * `ModelNotFoundException` (dari `findOrFail`) dan `AuthorizationException` (dari policy) otomatis dikonversi Laravel menjadi `HttpException` 404/403 sebelum callback dijalankan, jadi ikut tertangkap handler nomor 3. Controller **tidak perlu** `try/catch` hanya untuk 404/403.
-* Pesan 404/405 bawaan framework sengaja dibuang karena berisi nama model/route (`No query results for model [App\Models\...]`). Status lain meneruskan pesan dari `abort($status, 'pesan')`, jadi middleware cukup `abort(403, 'Pesan yang jelas')`.
+* Pesan disusun oleh `ApiErrorHelpers` (lihat 1.5.1): spesifik tetapi aman. Pesan bawaan framework yang membocorkan namespace (`No query results for model [App\Models\...]`) diganti `Data Kategori dengan ID 999 tidak ditemukan`. Status lain meneruskan pesan dari `abort($status, 'pesan')`.
 * Header bawaan tetap dikirim (`Retry-After` untuk 429, `Allow` untuk 405), supaya frontend tahu kapan boleh retry.
-* Error 500 tidak pernah membocorkan detail (SQL, path) di production. Detail hanya muncul di `settings` saat `APP_DEBUG=true`, dan exception tetap tercatat di log.
+* Error 500 tidak pernah membocorkan detail (SQL, path) di production. Client menerima **kode referensi** (`settings.error_ref`) yang sama dengan yang tercatat di log (via `$exceptions->context`), sehingga tim IT bisa langsung mencari error-nya. Detail exception hanya muncul di `settings.debug` saat `APP_DEBUG=true`.
 * `ValidationException` tetap memakai format default Laravel (lihat 1.4), tidak dipetakan ke macro.
 * **Urutan callback penting**: Laravel memakai callback pertama yang cocok dan mengembalikan response. Callback spesifik (`AuthenticationException`, Spatie `UnauthorizedException`) wajib di atas `HttpExceptionInterface`, dan `Throwable` wajib paling bawah.
 
-Peta error API (yang diterima frontend):
+Peta error API (contoh `message` yang diterima frontend):
 
-| Sumber | Status | `message` / `errors` |
+| Sumber | Status | Contoh `message` |
 |---|---|---|
-| Tanpa token / token salah / expired (`auth:sanctum`) | 401 | `Unauthorized` |
-| Bukan anggota company / header company salah (`tenant`) | 403 | `Company tidak valid atau Anda bukan anggota company ini` |
-| Modul tidak aktif di paket company (`module:`) | 403 | `Modul <key> tidak aktif untuk paket company ini` |
-| Tidak punya permission (`permission:`) | 403 | `Anda tidak memiliki akses untuk aksi ini` |
-| Policy / Gate / `abort(403, ...)` | 403 | pesan dari kode |
-| Data / route tidak ada | 404 | `Not Found` |
-| Method salah | 405 | `Method Not Allowed` |
-| Konflik (mis. role masih dipakai) | 409 | pesan dari kode |
-| Validasi gagal | 422 | format default Laravel (1.4) |
-| Rate limit (`throttle:`) | 429 | `Too Many Attempts.` + header `Retry-After` |
-| Maintenance (`php artisan down`) | 503 | `Service Unavailable` |
-| Exception tak tertangani | 500 | `Terjadi kesalahan pada server` |
+| Header token tidak dikirim (`auth:sanctum`) | 401 | `Token tidak ditemukan. Sertakan header Authorization: Bearer <token>` |
+| Token salah / expired (`auth:sanctum`) | 401 | `Token tidak valid atau sudah kedaluwarsa. Silakan login ulang` |
+| Header company tidak dikirim (`tenant`) | 400 | `Header X-Company-Id wajib dikirim untuk menentukan company aktif` |
+| Bukan anggota company (`tenant`) | 403 | `Anda bukan anggota company dengan ID 99. Pilih company yang terdaftar di akun Anda` |
+| Modul tidak aktif (`module:`) | 403 | `Modul hris tidak aktif untuk paket company ACME. Hubungi admin company untuk mengaktifkan atau upgrade paket` |
+| Tidak punya permission (`permission:`) | 403 | `Anda tidak memiliki izin untuk aksi ini. Izin yang dibutuhkan: hris.employee.create` |
+| Policy / `abort(403, ...)` | 403 | pesan spesifik dari kode |
+| Data tidak ada (`findOrFail`, route model binding) | 404 | `Data Kategori dengan ID 999 tidak ditemukan` |
+| Endpoint tidak ada | 404 | `Endpoint GET /api/v1/tidak-ada tidak ditemukan` |
+| Method salah | 405 | `Method POST tidak didukung untuk endpoint /api/v1/kategori/1. Method yang didukung: GET, HEAD` |
+| Konflik bisnis | 409 | `Role "Staff HR" tidak bisa dihapus karena masih dipakai` |
+| Validasi gagal | 422 | format default Laravel, pesan per field berbahasa Indonesia (1.4) |
+| Rate limit (`throttle:`) | 429 | `Terlalu banyak request. Coba lagi dalam 42 detik` + header `Retry-After` |
+| Maintenance (`php artisan down`) | 503 | `Sistem sedang dalam pemeliharaan. Coba lagi beberapa saat lagi` |
+| Exception tak tertangani | 500 | `Terjadi kesalahan pada server saat memproses GET /api/v1/x. Kode referensi: <uuid>. Laporkan kode ini ke tim IT` |
 
-Test wajib (`tests/Feature/ErrorFormatTest.php`): tiap baris tabel di atas mengembalikan struktur `status_code`, `message`, `errors`, `settings` dengan status yang benar, `Retry-After` ada di 429, dan 500 tidak mengandung detail exception saat `APP_DEBUG=false`.
+Test wajib (`tests/Feature/ErrorFormatTest.php`): tiap baris tabel di atas mengembalikan struktur `status_code`, `message`, `errors`, `settings` dengan status **dan pesan** yang benar, `Retry-After` ada di 429, dan 500 tidak mengandung detail exception saat `APP_DEBUG=false` tetapi kode referensinya ada di log.
 * Laravel 13: middleware juga boleh dideklarasikan di controller memakai attribute `#[Middleware('permission:hris.employee.view', only: ['index'])]` (`Illuminate\Routing\Attributes\Controllers\Middleware`). Untuk Laravel 12 gunakan interface `HasMiddleware` + static `middleware()`. Pilih **satu** pola per project (route-level atau controller-level), jangan dicampur.
 
 Rekomendasi struktur controller/resource per versi:
@@ -541,12 +556,16 @@ class SetTenantContext
 {
     public function handle(Request $request, Closure $next): Response
     {
-        $companyId = (int) $request->header('X-Company-Id');
+        $companyId = $request->header('X-Company-Id');
 
-        $company = $request->user()?->companies()->whereKey($companyId)->first();
+        if (! $companyId) {
+            abort(400, 'Header X-Company-Id wajib dikirim untuk menentukan company aktif');
+        }
+
+        $company = $request->user()?->companies()->whereKey((int) $companyId)->first();
 
         if (! $company) {
-            return response()->forbidden(['Company tidak valid atau Anda bukan anggota company ini']);
+            abort(403, "Anda bukan anggota company dengan ID {$companyId}. Pilih company yang terdaftar di akun Anda");
         }
 
         // Simpan konteks tenant untuk request ini
@@ -725,6 +744,28 @@ class RoleStoreRequest extends FormRequest
         ];
     }
 
+    public function attributes(): array
+    {
+        return [
+            'name' => 'nama role',
+            'permissions' => 'daftar permission',
+            'permissions.*' => 'permission',
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'name.required' => 'Nama role wajib diisi',
+            'name.max' => 'Nama role maksimal :max karakter',
+            'name.unique' => 'Role dengan nama ":input" sudah ada di company ini. Gunakan nama lain',
+            'permissions.required' => 'Pilih minimal satu permission untuk role ini',
+            'permissions.min' => 'Pilih minimal satu permission untuk role ini',
+            'permissions.*.exists' => 'Permission ":input" tidak terdaftar di katalog permission',
+            'permissions.*.distinct' => 'Permission ":input" dipilih lebih dari sekali',
+        ];
+    }
+
     public function after(): array
     {
         return [
@@ -774,6 +815,15 @@ class UserRoleSyncRequest extends FormRequest
         return [
             'roles' => ['present', 'array'],
             'roles.*' => ['integer', 'distinct', Rule::exists('roles', 'id')->where($teamKey, getPermissionsTeamId())],
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'roles.present' => 'Field roles wajib dikirim (kirim [] untuk melepas semua role)',
+            'roles.*.exists' => 'Role dengan ID :input tidak ditemukan di company ini',
+            'roles.*.distinct' => 'Role dengan ID :input dipilih lebih dari sekali',
         ];
     }
 
@@ -913,13 +963,18 @@ class RoleController extends Controller
     {
         $role = RbacHelpers::companyRoles()->findOrFail($id);
 
-        if ($role->users()->exists()) {
-            return response()->conflict(['Role masih dipakai user, lepas dulu dari user sebelum dihapus']);
+        $usedBy = $role->users()->count();
+
+        if ($usedBy > 0) {
+            return response()->conflict(
+                ["Role \"{$role->name}\" masih dipakai oleh {$usedBy} user. Lepas role ini dari user tersebut sebelum menghapus"],
+                "Role \"{$role->name}\" tidak bisa dihapus karena masih dipakai",
+            );
         }
 
         $role->delete();
 
-        return response()->success([], 'Role berhasil dihapus');
+        return response()->success([], "Role \"{$role->name}\" berhasil dihapus");
     }
 }
 ```
@@ -1322,6 +1377,165 @@ Tujuan:
 * Format response konsisten di seluruh endpoint.
 * Controller tetap tipis dan mudah dibaca.
 * Memudahkan frontend karena struktur response seragam.
+
+### 1.5.1 Standar Pesan Error (Wajib Spesifik, Dilarang Umum)
+
+Pesan error ditulis oleh backend dan langsung ditampilkan frontend ke user, jadi **wajib jelas**: user (dan tim support) harus tahu **apa yang gagal**, **kenapa**, dan **apa yang harus dilakukan**, tanpa perlu membuka log.
+
+Aturan:
+
+* **`message`** = satu kalimat spesifik yang siap ditampilkan: objek + kondisi + (jika ada) langkah perbaikan.
+* **`errors`** = daftar detail/alasan. Jika hanya satu alasan, isinya boleh sama dengan `message`.
+* Sebutkan **objek yang spesifik**: nama data, ID, nama field, nama modul, nama permission. Contoh `Role "Staff HR"`, `Data Karyawan dengan ID 45`.
+* Bahasa Indonesia, kalimat lengkap, tanpa singkatan internal.
+* **Dilarang** pesan umum: `Error`, `Gagal`, `Terjadi kesalahan`, `Not Found`, `Forbidden`, `Bad Request`, `Data tidak valid`, `Something went wrong`.
+* **Dilarang** memanggil macro error tanpa argumen (`response()->forbidden()`, `response()->notFound()`), dan **dilarang** `abort(403)` tanpa pesan. Selalu `abort(403, 'pesan spesifik')` atau `response()->forbidden(['detail'], 'pesan')`.
+* **Spesifik tetapi aman**: jangan menampilkan namespace class, nama tabel, query SQL, path file, stack trace, atau isi token. Detail teknis cukup di log.
+* Error 500 tidak boleh menjelaskan penyebab teknis ke client, tetapi wajib menyertakan **kode referensi** yang bisa dicari di log.
+
+Contoh:
+
+| Situasi | Dilarang (umum) | Wajib (spesifik) |
+|---|---|---|
+| Data tidak ada | `Not Found` | `Data Karyawan dengan ID 45 tidak ditemukan` |
+| Hapus data yang masih dipakai | `Gagal menghapus data` | `Role "Staff HR" tidak bisa dihapus karena masih dipakai oleh 3 user` |
+| Status transaksi tidak sesuai | `Bad Request` | `Invoice INV-2026-0012 sudah dibayar dan tidak bisa diubah` |
+| Kuota/limit | `Forbidden` | `Paket Basic hanya mengizinkan 10 user aktif. Saat ini sudah 10 user, upgrade paket untuk menambah user` |
+| File import salah | `File tidak valid` | `Kolom "nama" wajib ada di baris header file Excel` |
+| Akses | `Unauthorized` | `Anda tidak memiliki izin untuk aksi ini. Izin yang dibutuhkan: finance.invoice.approve` |
+
+Contoh di controller:
+
+```php
+$invoice = InvoiceModel::findOrFail($id); // 404 otomatis: "Data Invoice dengan ID 12 tidak ditemukan"
+
+if ($invoice->status === 'paid') {
+    return response()->conflict(
+        ["Invoice {$invoice->nomor} sudah berstatus paid sejak {$invoice->paid_at->format('d M Y')}"],
+        "Invoice {$invoice->nomor} sudah dibayar dan tidak bisa diubah",
+    );
+}
+```
+
+Di middleware / service (di luar controller), gunakan `abort()` dengan pesan; handler global (1.3.7) mengubahnya ke format macro:
+
+```php
+abort(409, "Periode payroll {$periode} sudah dikunci. Buka kunci periode terlebih dahulu");
+```
+
+Label data pada pesan 404 otomatis diambil dari nama model (`KaryawanModel` → `Karyawan`, `DetailPostModel` → `Detail Post`). Jika ingin label lain, tambahkan konstanta di model:
+
+```php
+class EmployeeModel extends Model
+{
+    public const LABEL = 'Karyawan';
+}
+```
+
+Pesan validasi (422) juga wajib jelas dan berbahasa Indonesia:
+
+* Setiap Form Request wajib punya `attributes()` (nama field yang manusiawi) dan `messages()` untuk aturan yang pesannya perlu konteks (unique, exists, aturan bisnis). Contoh lengkap di `RoleStoreRequest` (1.3.8).
+* Set `APP_LOCALE=id` dan sediakan terjemahan `lang/id/validation.php` untuk pesan bawaan Laravel. File bisa dibuat dari `php artisan lang:publish` lalu diterjemahkan, atau memakai package terjemahan komunitas (`laravel-lang/common`). Package ini opsional, jadi ikuti protokol konfirmasi di 0.1 sebelum memasangnya.
+
+Helper penyusun pesan untuk handler global (`app/Helpers/ApiErrorHelpers.php`):
+
+```php
+<?php
+
+namespace App\Helpers;
+
+use Illuminate\Auth\AuthenticationException;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
+use Spatie\Permission\Exceptions\UnauthorizedException;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
+
+/**
+ * Menyusun pesan error API yang spesifik (apa yang gagal + kenapa + apa yang harus dilakukan)
+ * tanpa membocorkan detail internal (namespace class, SQL, path file).
+ */
+class ApiErrorHelpers
+{
+    /**
+     * Kode referensi error per request, sama di response dan di log.
+     */
+    public static function reference(): string
+    {
+        $request = request();
+
+        if (! $request->attributes->has('error_ref')) {
+            $request->attributes->set('error_ref', (string) Str::uuid());
+        }
+
+        return $request->attributes->get('error_ref');
+    }
+
+    /**
+     * Label model untuk pesan: pakai konstanta LABEL jika ada,
+     * jika tidak dari nama class (KategoriModel -> Kategori, DetailPostModel -> Detail Post).
+     */
+    public static function modelLabel(string $modelClass): string
+    {
+        if (defined($modelClass.'::LABEL')) {
+            return $modelClass::LABEL;
+        }
+
+        return Str::of(class_basename($modelClass))->replaceEnd('Model', '')->headline()->toString();
+    }
+
+    public static function unauthenticated(AuthenticationException $e, Request $request): string
+    {
+        return $request->bearerToken()
+            ? 'Token tidak valid atau sudah kedaluwarsa. Silakan login ulang'
+            : 'Token tidak ditemukan. Sertakan header Authorization: Bearer <token>';
+    }
+
+    public static function permissionDenied(UnauthorizedException $e): string
+    {
+        $required = $e->getRequiredPermissions() ?: $e->getRequiredRoles();
+
+        return $required
+            ? 'Anda tidak memiliki izin untuk aksi ini. Izin yang dibutuhkan: '.implode(' atau ', $required)
+            : 'Anda tidak memiliki izin untuk aksi ini';
+    }
+
+    public static function fromHttpException(HttpExceptionInterface $e, Request $request): string
+    {
+        $status = $e->getStatusCode();
+        $previous = $e->getPrevious();
+        $headers = $e->getHeaders();
+        $endpoint = $request->method().' /'.$request->path();
+
+        if ($previous instanceof ModelNotFoundException) {
+            $label = self::modelLabel($previous->getModel());
+            $ids = implode(', ', Arr::wrap($previous->getIds()));
+
+            return $ids !== ''
+                ? "Data {$label} dengan ID {$ids} tidak ditemukan"
+                : "Data {$label} tidak ditemukan";
+        }
+
+        return match (true) {
+            $status === 404 => "Endpoint {$endpoint} tidak ditemukan",
+            $status === 405 => "Method {$request->method()} tidak didukung untuk endpoint /{$request->path()}. Method yang didukung: ".($headers['Allow'] ?? '-'),
+            $status === 429 => 'Terlalu banyak request. Coba lagi dalam '.($headers['Retry-After'] ?? 60).' detik',
+            $status === 503 && in_array($e->getMessage(), ['', 'Service Unavailable'], true) => 'Sistem sedang dalam pemeliharaan. Coba lagi beberapa saat lagi',
+            $e->getMessage() !== '' => $e->getMessage(),
+            // Sampai sini berarti ada abort()/exception tanpa pesan: itu pelanggaran standar, perbaiki di kode pemanggil
+            default => "Permintaan ke {$endpoint} ditolak (HTTP {$status}) tanpa keterangan. Laporkan ke tim IT",
+        };
+    }
+}
+```
+
+Checklist review pesan error:
+
+* Tidak ada pemanggilan macro error tanpa argumen dan tidak ada `abort()` tanpa pesan.
+* Setiap `message` menyebut objek spesifik (nama/ID/field/modul/permission).
+* Tidak ada nama class, tabel, SQL, atau path di response.
+* Test endpoint meng-assert isi `message`, bukan hanya status code.
 
 ---
 
@@ -2127,7 +2341,8 @@ app/
 ├── Helpers/
 │   ├── KategoriHelpers.php
 │   ├── PostHelpers.php
-│   └── RbacHelpers.php
+│   ├── RbacHelpers.php
+│   └── ApiErrorHelpers.php         # penyusun pesan error spesifik
 │
 ├── Models/
 │   ├── Concerns/
@@ -2312,6 +2527,7 @@ DetailPostResource
 | N+1 guard       | `Model::preventLazyLoading()` di `AppServiceProvider` |
 | RBAC            | Spatie teams (`company_id`), permission dari enum, role dibuat user via `/api/v1/rbac/roles` |
 | Install package | Wajib konfirmasi user dulu (0.1), command non-interaktif (0.2) |
+| Pesan error     | Wajib spesifik: objek + alasan + langkah (1.5.1), dilarang pesan umum / macro tanpa argumen |
 | Realtime        | Reverb, private channel `company.{id}.<modul>...`, event suffix `Event` |
 | AI              | Laravel AI SDK, `app/Ai/Agents` suffix `Agent`, structured output, fake di test |
 | Excel           | Laravel Excel 4 (typed), `app/Exports` / `app/Imports`, queued untuk data besar |
