@@ -4,6 +4,10 @@ Standar arsitektur, naming convention, dan struktur folder untuk Laravel API —
 dipaketkan sebagai **Claude Code Plugin** sekaligus **Skill universal**, supaya
 tim tinggal 1-2 command tiap bikin project baru, tanpa copy-paste dokumentasi.
 
+Target: **Laravel 13** (PHP 8.3+), tetap kompatibel dengan Laravel 12. Memakai
+Sanctum 4, Spatie Laravel Permission 8, PHP attributes model (`#[Table]`,
+`#[Fillable]`), konfigurasi `bootstrap/app.php`, dan guard N+1 bawaan Laravel.
+
 Mencakup: multi-tenant (company/plan/RBAC), versioning API, Form Request wajib,
 response macro standar, anti N+1, security/injection prevention, token security
 Sanctum, naming tabel (`m_`, `t_`, `_det`), naming model (`...Model`), dan struktur

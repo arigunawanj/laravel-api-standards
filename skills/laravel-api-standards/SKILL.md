@@ -1,6 +1,6 @@
 ---
 name: laravel-api-standards
-description: Architect, implement, and review Laravel APIs following strict enterprise standards for multi-tenancy, naming conventions (m_, t_, Model suffix), folder structures, and mandatory audit fields. Use when creating or modifying Laravel models, controllers, migrations, or when performing code reviews to ensure strict adherence to the defined schema.
+description: Architect, implement, and review Laravel 13 APIs (PHP 8.3+, also compatible with Laravel 12) following strict enterprise standards for multi-tenancy, naming conventions (m_, t_, Model suffix), folder structures, and mandatory audit fields. Use when creating or modifying Laravel models, controllers, migrations, or when performing code reviews to ensure strict adherence to the defined schema.
 ---
 
 # Dokumentasi Awalan Laravel API (Naming Convention & Struktur Folder)
@@ -19,13 +19,30 @@ Dokumentasi ini digunakan sebagai **standar awal (awalan / prompt)** dalam membu
 
 ---
 
+## 1.0 Target Versi
+
+* **Laravel 13.x** (rilis 17 Maret 2026), **PHP minimal 8.3**.
+* Tetap kompatibel dengan **Laravel 12** (PHP 8.2+). Fitur yang khusus Laravel 13 (PHP attributes seperti `#[Table]`, `#[Fillable]`, `#[Middleware]`) diberi catatan fallback-nya.
+* Struktur aplikasi mengikuti skeleton Laravel 11+: **tidak ada** `app/Http/Kernel.php` dan `app/Console/Kernel.php`. Middleware, exception handling, dan routing dikonfigurasi di `bootstrap/app.php`; service provider didaftarkan di `bootstrap/providers.php`.
+
+---
+
 ## 1.1 Stack Tambahan (Package Wajib)
 
 Backend ini menggunakan Laravel + beberapa package tambahan:
 
-* **Sanctum**: API authentication (Bearer token)
+* **Sanctum** (`laravel/sanctum` ^4): API authentication (Bearer token)
+* **Spatie Laravel Permission** (`spatie/laravel-permission` ^8): RBAC
 * **DOMPDF**: export PDF (`barryvdh/laravel-dompdf`)
 * **Laravel Excel**: export/import Excel (`maatwebsite/excel`)
+
+Setup awal API (Laravel 11+): skeleton baru **tidak** punya `routes/api.php`. Jalankan:
+
+```shell
+php artisan install:api
+```
+
+Command ini meng-install Sanctum dan membuat `routes/api.php` (otomatis ber-prefix `/api` dan memakai middleware group `api`).
 
 Catatan:
 
@@ -79,6 +96,7 @@ Standar implementasi:
 Middleware:
 
 * Gunakan middleware tenant sesuai implementasi project (contoh: `tenant`).
+* Semua alias middleware custom (`tenant`, `module`) dan Spatie (`permission`, `role`) **wajib** didaftarkan di `bootstrap/app.php` (lihat 1.3.7).
 
 ### 1.3.3 Module Gating (Plan/Entitlement)
 
@@ -90,11 +108,16 @@ Jika modul tidak aktif untuk company, API mengembalikan **403**.
 
 ### 1.3.4 Permission Check (RBAC)
 
-RBAC pada project Laravel ini menggunakan package **Spatie Laravel Permission (v7)**.
+RBAC pada project Laravel ini menggunakan package **Spatie Laravel Permission (v8)**. v8 membutuhkan PHP 8.3+ dan Laravel 12/13.
 
 Referensi:
 
-* https://spatie.be/docs/laravel-permission/v7/introduction
+* https://spatie.be/docs/laravel-permission/v8/introduction
+
+Upgrade dari versi lama:
+
+* v6 → v7: event dan command class mendapat suffix (`RoleAttachedEvent`, `CacheResetCommand`, dst), `clearClassPermissions()` dihapus (ganti `clearPermissionsCollection()`), `assignRole()` / `givePermissionTo()` kini return `static`.
+* v7 → v8: `findByName()` dan `findOrCreate()` menerima `BackedEnum|string`; sesuaikan signature jika punya model Role/Permission custom.
 
 Permission check per endpoint:
 
@@ -105,6 +128,8 @@ Catatan:
 * Jika membership `is_owner = true` maka bypass permission.
 * Assign role/permission mengikuti pola Spatie (`assignRole`, `givePermissionTo`).
 * Permission check gunakan kemampuan native Laravel/Gate yang terintegrasi (`can`) sesuai integrasi Spatie.
+* Jika role/permission berbeda per company, aktifkan fitur **teams** Spatie (`'teams' => true` di `config/permission.php`) dan set konteks di middleware `tenant` dengan `setPermissionsTeamId($companyId)`.
+* Permission key boleh berupa string atau `BackedEnum` (v8), contoh enum `Permission::HrisEmployeeView`.
 
 ### 1.3.5 Grouping API V1 per Modul
 
@@ -166,6 +191,84 @@ Route::prefix('v2')->middleware(['auth:sanctum', 'tenant'])->group(function () {
 });
 ```
 
+### 1.3.7 Registrasi Middleware & Exception (bootstrap/app.php)
+
+Laravel 11+ tidak lagi memakai `app/Http/Kernel.php`. Alias middleware dan rendering exception API **wajib** dikonfigurasi di `bootstrap/app.php`:
+
+```php
+<?php
+
+use App\Http\Middleware\EnsureModuleIsActive;
+use App\Http\Middleware\SetTenantContext;
+use Illuminate\Auth\AuthenticationException;
+use Illuminate\Foundation\Application;
+use Illuminate\Foundation\Configuration\Exceptions;
+use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use Symfony\Component\HttpKernel\Exception\MethodNotAllowedHttpException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
+
+return Application::configure(basePath: dirname(__DIR__))
+    ->withRouting(
+        web: __DIR__.'/../routes/web.php',
+        api: __DIR__.'/../routes/api.php',
+        commands: __DIR__.'/../routes/console.php',
+        health: '/up',
+    )
+    ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->alias([
+            'tenant' => SetTenantContext::class,
+            'module' => EnsureModuleIsActive::class,
+            'role' => \Spatie\Permission\Middleware\RoleMiddleware::class,
+            'permission' => \Spatie\Permission\Middleware\PermissionMiddleware::class,
+            'role_or_permission' => \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
+        ]);
+    })
+    ->withExceptions(function (Exceptions $exceptions): void {
+        // Semua route API selalu dirender sebagai JSON
+        $exceptions->shouldRenderJsonWhen(
+            fn (Request $request) => $request->is('api/*') || $request->expectsJson()
+        );
+
+        // Petakan exception umum ke response macro standar (lihat 1.5)
+        $exceptions->render(function (NotFoundHttpException $e, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->notFound();
+            }
+        });
+        $exceptions->render(function (AuthenticationException $e, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->unauthorized();
+            }
+        });
+        $exceptions->render(function (AccessDeniedHttpException $e, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->forbidden();
+            }
+        });
+        $exceptions->render(function (MethodNotAllowedHttpException $e, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->methodNotAllowed();
+            }
+        });
+        $exceptions->render(function (TooManyRequestsHttpException $e, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->tooManyRequests();
+            }
+        });
+    })
+    ->create();
+```
+
+Catatan:
+
+* `ModelNotFoundException` (dari `findOrFail`) otomatis dikonversi Laravel menjadi `NotFoundHttpException`, jadi controller **tidak perlu** `try/catch` hanya untuk 404.
+* `ValidationException` tetap memakai format default Laravel (lihat 1.4), tidak dipetakan ke macro.
+* Spatie `UnauthorizedException` adalah `HttpException` 403; jika ingin format macro juga, tambahkan `render` untuk `\Spatie\Permission\Exceptions\UnauthorizedException`.
+* Laravel 13: middleware juga boleh dideklarasikan di controller memakai attribute `#[Middleware('permission:hris.employee.view', only: ['index'])]` (`Illuminate\Routing\Attributes\Controllers\Middleware`). Untuk Laravel 12 gunakan interface `HasMiddleware` + static `middleware()`. Pilih **satu** pola per project (route-level atau controller-level), jangan dicampur.
+
 Rekomendasi struktur controller/resource per versi:
 
 * Controller:
@@ -202,13 +305,14 @@ Aturan:
 Implementasi:
 
 * Method `authorize()`:
-  * Default `return true;` jika authorization sudah ditangani middleware (`auth`, `company`, `permission`)
+  * Default `return true;` jika authorization sudah ditangani middleware (`auth:sanctum`, `tenant`, `permission`)
 * Method `rules()`:
   * Semua rule validasi didefinisikan di sini (required, string, max, exists, unique, array, dst)
 * Method `messages()` (opsional):
   * Digunakan untuk custom pesan validasi agar konsisten
 * Method `prepareForValidation()` (opsional):
   * Digunakan untuk normalisasi data sebelum validasi (trim, cast, mapping key, dst)
+* Laravel 13 (opsional): attribute `#[StopOnFirstFailure]` (`Illuminate\Foundation\Http\Attributes\StopOnFirstFailure`) menggantikan property `$stopOnFirstFailure`.
 
 Penggunaan di Controller (wajib):
 
@@ -223,18 +327,23 @@ Penggunaan di Controller (wajib):
 
 Standar response error validasi:
 
-* Jika validasi gagal, response harus **422 Unprocessable Entity** dengan format default Laravel:
+* Jika validasi gagal, response harus **422 Unprocessable Entity** dengan format default Laravel. `message` berisi pesan error pertama (+ jumlah error lain), dan key nested memakai dot notation:
 
 ```json
 {
-  "message": "The given data was invalid.",
+  "message": "The nama field is required. (and 1 more error)",
   "errors": {
-    "nama_field": [
-      "Pesan error validasi"
+    "nama": [
+      "The nama field is required."
+    ],
+    "items.0.qty": [
+      "The items.0.qty field must be at least 1."
     ]
   }
 }
 ```
+
+* Format ini otomatis keluar jika request API meminta JSON (header `Accept: application/json`, atau route `api/*` dengan `shouldRenderJsonWhen` di 1.3.7).
 
 ---
 
@@ -265,11 +374,12 @@ Aturan:
   * `internalServerError`
   * `serviceUnavailable`
 * Provider wajib terdaftar pada aplikasi Laravel agar macro bisa dipanggil melalui `response()->...`.
-* Khusus Laravel 12+:
+* Laravel 11+ (termasuk 12 dan 13):
   * Wajib daftarkan `\App\Providers\ResponseMacroServiceProvider::class` di file `bootstrap/providers.php`.
+  * `php artisan make:provider ResponseMacroServiceProvider` otomatis menambahkannya ke `bootstrap/providers.php`; jika file dibuat manual, tambahkan sendiri.
   * Tanpa registrasi ini, macro `response()->success(...)` dan macro lainnya tidak akan aktif.
 
-Contoh `bootstrap/providers.php` (Laravel 12+):
+Contoh `bootstrap/providers.php` (Laravel 11+):
 
 ```php
 <?php
@@ -289,25 +399,24 @@ Penggunaan di Controller (wajib):
   * `response()->notFound(...)` untuk data tidak ditemukan
   * `response()->unprocessableEntity(...)` untuk validasi gagal (jika diperlukan custom handling)
   * `response()->internalServerError(...)` untuk error server
+* Jangan membungkus seluruh method dengan `catch (\Exception $e)` lalu mengembalikan 404. Itu menyamarkan error server (500) sebagai "not found". Biarkan `findOrFail` melempar exception; mapping ke `response()->notFound()` ditangani global di `bootstrap/app.php` (1.3.7). Gunakan `try/catch` hanya untuk exception spesifik yang memang perlu respons berbeda.
 
 Contoh implementasi controller:
 
 ```php
 public function show(string $id)
 {
-    try {
-        $pendaftaran = PendaftaranModel::with(['peserta', 'merchandise.merchandise', 'kategoriLomba'])
-            ->findOrFail($id);
+    $pendaftaran = PendaftaranModel::with(['peserta', 'merchandise.merchandise', 'kategoriLomba'])
+        ->findOrFail($id); // 404 otomatis via handler global
 
-        return response()->success(
-            new PendaftaranResource($pendaftaran),
-            'Data pendaftaran berhasil diambil'
-        );
-    } catch (\Exception $e) {
-        return response()->notFound(['message' => 'Pendaftaran tidak ditemukan']);
-    }
+    return response()->success(
+        new PendaftaranResource($pendaftaran),
+        'Data pendaftaran berhasil diambil'
+    );
 }
 ```
+
+Catatan Laravel 13: framework kini punya JSON:API resources bawaan. Project ini **tidak** memakainya; format response tetap mengikuti macro di bawah agar kontrak dengan frontend tidak berubah.
 
 Template wajib `app/Providers/ResponseMacroServiceProvider.php` (gunakan isi ini secara konsisten, jangan diimprovisasi/random):
 
@@ -529,6 +638,21 @@ foreach ($pendaftaranList as $item) {
 }
 ```
 
+Guard wajib di `AppServiceProvider::boot()` agar N+1 ketahuan saat development (exception di local/staging, tidak mengganggu production):
+
+```php
+use Illuminate\Database\Eloquent\Model;
+
+public function boot(): void
+{
+    Model::preventLazyLoading(! $this->app->isProduction());
+    Model::preventSilentlyDiscardingAttributes(! $this->app->isProduction());
+}
+```
+
+* `preventSilentlyDiscardingAttributes` membuat field yang tidak ada di `fillable` melempar exception (bukan diam-diam dibuang), sehingga bug mass assignment cepat ketahuan.
+* `Model::automaticallyEagerLoadRelationships()` (Laravel 12.8+) **tidak** menggantikan aturan di atas. Eager loading eksplisit dengan `with()` tetap wajib supaya query bisa dibaca dan direview.
+
 Checklist review query:
 
 * Pastikan relasi di Resource sudah dipetakan ke eager loading query.
@@ -550,7 +674,7 @@ Aturan wajib:
   * Wajib gunakan `$request->validated()` untuk create/update/filter.
   * Dilarang memakai `$request->all()` langsung ke query atau model.
 * **Mass assignment protection**:
-  * Model wajib punya `$fillable` yang jelas.
+  * Model wajib punya daftar fillable yang jelas (`#[Fillable([...])]` di Laravel 13, atau `$fillable` di Laravel 12).
   * Dilarang membuka semua field sensitif untuk diisi dari request.
 * **Hindari raw query tidak aman**:
   * Hindari `DB::raw()` dan query raw string jika tidak diperlukan.
@@ -603,7 +727,24 @@ Aturan wajib backend:
 * Wajib pakai HTTPS pada environment production (token tidak boleh lewat HTTP plain).
 * Aktifkan rate limiting pada endpoint sensitif:
   * login, refresh token, forgot password, OTP, dan endpoint auth lain.
-* Batasi masa berlaku token (TTL) sesuai kebijakan keamanan (disarankan pendek untuk akses token).
+  * Definisikan limiter di `AppServiceProvider::boot()`, lalu pasang `throttle:<nama>` di route:
+
+```php
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
+
+RateLimiter::for('login', function (Request $request) {
+    return Limit::perMinute(5)->by(strtolower((string) $request->input('email')).'|'.$request->ip());
+});
+
+// routes/api.php
+Route::post('auth/login', [AuthController::class, 'login'])->middleware('throttle:login');
+```
+* Batasi masa berlaku token (TTL) sesuai kebijakan keamanan (disarankan pendek untuk akses token). Default Sanctum: token **tidak pernah expire**, jadi wajib diset:
+  * Global: `'expiration' => 60 * 24` (menit) di `config/sanctum.php`, atau
+  * Per token: argumen ketiga `createToken`, contoh `$user->createToken('android-app', ['hris:read'], now()->addDays(7))`.
+  * Jadwalkan pembersihan token expired di `routes/console.php`: `Schedule::command('sanctum:prune-expired --hours=24')->daily();`
 * Token wajib bisa di-revoke (logout current device / logout all devices).
 * Jika akun terindikasi risiko (password reset, device mencurigakan, role berubah), lakukan invalidasi token aktif.
 
@@ -719,6 +860,7 @@ Catatan:
 * Tipe kolom mengikuti PK user (umumnya `unsignedBigInteger`)
 * Disarankan diberi index agar query audit cepat
 * `deleted_by` diisi saat proses delete (karena soft delete tidak menghapus record)
+* Kolom ini tetap `unsignedBigInteger` tanpa foreign key constraint, agar data audit tidak ikut terhapus/terkunci saat user dihapus.
 
 Implementasi wajib pada CRUD:
 
@@ -726,6 +868,40 @@ Implementasi wajib pada CRUD:
 * **Update (update)**: set `updated_by = auth()->id()`
 * **Delete (destroy/soft delete)**: set `deleted_by = auth()->id()` lalu lakukan soft delete
 * (Opsional) **Restore**: jika data di-restore, biasanya `deleted_by` di-`null`-kan kembali (sesuai kebutuhan bisnis)
+
+Implementasi yang disarankan: otomatisasi lewat trait model agar tidak ada endpoint yang lupa mengisi audit field. Jika trait ini dipakai, **jangan** set kolom audit manual lagi di controller.
+
+```php
+<?php
+
+namespace App\Models\Concerns;
+
+trait HasAuditColumns
+{
+    public static function bootHasAuditColumns(): void
+    {
+        static::creating(function ($model) {
+            $model->created_by ??= auth()->id();
+        });
+
+        static::updating(function ($model) {
+            $model->updated_by = auth()->id();
+        });
+
+        // Soft delete hanya meng-update deleted_at, jadi deleted_by disimpan dulu secara quiet
+        static::deleting(function ($model) {
+            if (method_exists($model, 'isForceDeleting') && ! $model->isForceDeleting()) {
+                $model->deleted_by = auth()->id();
+                $model->saveQuietly();
+            }
+        });
+
+        static::restoring(function ($model) {
+            $model->deleted_by = null;
+        });
+    }
+}
+```
 
 ### 2.4.2 Soft Deletes (wajib)
 
@@ -823,7 +999,7 @@ t_post  ->  PostModel
 Mapping:
 
 ```
-t_post_kategori  ->  DetailPostModel
+t_post_kategori_det  ->  DetailPostModel
 ```
 
 ---
@@ -836,6 +1012,55 @@ Catatan:
 
 * Pastikan `use Illuminate\Database\Eloquent\SoftDeletes;` di model
 * Pastikan kolom `deleted_at` ada di migration (`$table->softDeletes()`)
+
+---
+
+## 3.5 Standar Definisi Model (Nama Tabel Wajib Eksplisit)
+
+Karena nama tabel memakai prefix (`m_`, `t_`, `_det`) dan nama class memakai suffix `Model`, konvensi otomatis Laravel **tidak akan** menebak nama tabel dengan benar (`KategoriModel` akan dicari ke tabel `kategori_models`). Nama tabel **wajib** ditulis eksplisit.
+
+Laravel 13 (direkomendasikan, PHP attributes di `Illuminate\Database\Eloquent\Attributes`):
+
+```php
+<?php
+
+namespace App\Models\Kategori;
+
+use App\Models\Concerns\HasAuditColumns;
+use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Attributes\Table;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+#[Table('m_kategori')]
+#[Fillable(['nama'])]
+class KategoriModel extends Model
+{
+    use HasAuditColumns;
+    use SoftDeletes;
+}
+```
+
+Laravel 12 (fallback, property biasa):
+
+```php
+class KategoriModel extends Model
+{
+    use HasAuditColumns;
+    use SoftDeletes;
+
+    protected $table = 'm_kategori';
+
+    protected $fillable = ['nama'];
+}
+```
+
+Aturan:
+
+* Gunakan **satu gaya** per project (attribute atau property), jangan dicampur dalam satu model.
+* Jika butuh cast, definisikan lewat method `casts()`, bukan property `$casts` (gaya Laravel 11+).
+* Kolom audit (`created_by`, `updated_by`, `deleted_by`) **tidak boleh** masuk fillable; diisi oleh trait/controller, bukan dari request.
+* Relasi `belongsToMany` ke tabel jembatan wajib menyebut nama tabel eksplisit, contoh `$this->belongsToMany(KategoriModel::class, 't_post_kategori_det', 'post_id', 'kategori_id')`.
 
 ---
 
@@ -860,27 +1085,48 @@ app/
 │   └── PostHelpers.php
 │
 ├── Models/
+│   ├── Concerns/
+│   │   └── HasAuditColumns.php
 │   └── Post/
 │       ├── PostModel.php
 │       └── DetailPostModel.php
 │
 ├── Http/
-│   └── Controllers/
-│       └── Post/
-│           └── PostController.php
-│
-├── Http/
+│   ├── Controllers/
+│   │   └── Api/
+│   │       └── V1/
+│   │           └── Post/
+│   │               └── PostController.php
+│   ├── Requests/
+│   │   └── Post/
+│   │       ├── PostStoreRequest.php
+│   │       └── PostUpdateRequest.php
 │   └── Resources/
-│       └── Post/
-│           ├── PostResource.php
-│           └── DetailPostResource.php
+│       └── Api/
+│           └── V1/
+│               └── Post/
+│                   ├── PostResource.php
+│                   └── DetailPostResource.php
 │
-├── Database/
-│   └── Seeders/
-│       └── Post/
-│           ├── PostSeeder.php
-│           └── DetailPostSeeder.php
+├── Providers/
+│   ├── AppServiceProvider.php
+│   └── ResponseMacroServiceProvider.php
+│
+bootstrap/
+├── app.php          # alias middleware + exception rendering
+└── providers.php    # registrasi provider
+│
+database/
+└── seeders/
+    └── Post/
+        ├── PostSeeder.php
+        └── DetailPostSeeder.php
 ```
+
+Catatan:
+
+* Seeder berada di `database/seeders/` (namespace `Database\Seeders\Post`), bukan di dalam `app/`.
+* Controller dan Resource dipisah per versi API lalu per fitur (`Api/V1/Post/...`), sesuai 1.3.6.
 
 ---
 
@@ -913,7 +1159,7 @@ Penggunaan (wajib):
 ### 5.1 Database
 
 * `t_post`
-* `t_post_kategori`
+* `t_post_kategori_det`
 
 ---
 
@@ -963,7 +1209,7 @@ DetailPostResource
 
 ## 6. Catatan Tambahan (Best Practice)
 
-* Gunakan **singular untuk Model**, **plural untuk table (opsional sesuai kesepakatan)**
+* Gunakan **singular untuk Model**; nama tabel mengikuti prefix `m_` / `t_` / `_det` (lihat bagian 2) dan wajib ditulis eksplisit di model (lihat 3.5)
 * Relasi antar model menggunakan `hasMany`, `belongsTo`, `belongsToMany`
 * Pisahkan logic bisnis ke **Service Layer** jika project mulai besar
 * Gunakan **API Resource** untuk konsistensi response
@@ -984,6 +1230,9 @@ DetailPostResource
 | Soft Deletes    | `deleted_at` + `SoftDeletes` trait |
 | Audit Field     | `created_by`, `updated_by`, `deleted_by` |
 | Helpers         | `app/Helpers` + suffix `Helpers` |
+| Nama tabel di Model | Wajib eksplisit: `#[Table('m_xxxx')]` (L13) / `$table` (L12) |
+| Middleware & Exception | Didaftarkan di `bootstrap/app.php` |
+| N+1 guard       | `Model::preventLazyLoading()` di `AppServiceProvider` |
 
 ---
 
