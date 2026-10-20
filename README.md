@@ -5,7 +5,8 @@ dipaketkan sebagai **Claude Code Plugin** sekaligus **Skill universal**, supaya
 tim tinggal 1-2 command tiap bikin project baru, tanpa copy-paste dokumentasi.
 
 Target: **Laravel 13** (PHP 8.3+), tetap kompatibel dengan Laravel 12. Memakai
-Sanctum 4, Spatie Laravel Permission 8, PHP attributes model (`#[Table]`,
+Sanctum 4, Spatie Laravel Permission 8, Reverb (realtime), Laravel AI SDK,
+Laravel Excel 4, DomPDF 3, PHP attributes model (`#[Table]`,
 `#[Fillable]`), konfigurasi `bootstrap/app.php`, dan guard N+1 bawaan Laravel.
 
 Mencakup: multi-tenant (company/plan/RBAC), versioning API, Form Request wajib,

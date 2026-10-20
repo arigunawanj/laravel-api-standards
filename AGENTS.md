@@ -32,7 +32,7 @@ Dokumentasi ini digunakan sebagai **standar awal (awalan / prompt)** dalam membu
 ## 1.0 Target Versi
 
 * **Laravel 13.x** (rilis 17 Maret 2026), **PHP minimal 8.3**.
-* Tetap kompatibel dengan **Laravel 12** (PHP 8.2+). Fitur yang khusus Laravel 13 (PHP attributes seperti `#[Table]`, `#[Fillable]`, `#[Middleware]`) diberi catatan fallback-nya.
+* Tetap kompatibel dengan **Laravel 12**, tetapi tetap butuh **PHP 8.3+** karena Spatie Permission 8, Laravel AI SDK, dan Laravel Excel 4 mensyaratkan PHP 8.3. Fitur yang khusus Laravel 13 (PHP attributes seperti `#[Table]`, `#[Fillable]`, `#[Middleware]`) diberi catatan fallback-nya.
 * Struktur aplikasi mengikuti skeleton Laravel 11+: **tidak ada** `app/Http/Kernel.php` dan `app/Console/Kernel.php`. Middleware, exception handling, dan routing dikonfigurasi di `bootstrap/app.php`; service provider didaftarkan di `bootstrap/providers.php`.
 
 ---
@@ -41,22 +41,45 @@ Dokumentasi ini digunakan sebagai **standar awal (awalan / prompt)** dalam membu
 
 Backend ini menggunakan Laravel + beberapa package tambahan:
 
-* **Sanctum** (`laravel/sanctum` ^4): API authentication (Bearer token)
-* **Spatie Laravel Permission** (`spatie/laravel-permission` ^8): RBAC
-* **DOMPDF**: export PDF (`barryvdh/laravel-dompdf`)
-* **Laravel Excel**: export/import Excel (`maatwebsite/excel`)
+| Package | Versi | Fungsi |
+|---|---|---|
+| `laravel/sanctum` | ^4 | API authentication (Bearer token) |
+| `spatie/laravel-permission` | ^8 | RBAC |
+| `laravel/reverb` | ^1.12 | WebSocket server untuk realtime / broadcasting |
+| `laravel/ai` | ^1.3 | Laravel AI SDK (agent, structured output, embeddings, dll) |
+| `maatwebsite/excel` | ^4.0 | Export/import Excel (Laravel Excel 4, PhpSpreadsheet 5) |
+| `barryvdh/laravel-dompdf` | ^3.1 | Export PDF (DomPDF 3) |
 
-Setup awal API (Laravel 11+): skeleton baru **tidak** punya `routes/api.php`. Jalankan:
+### 1.1.1 Urutan Setup Project Baru
+
+Skeleton Laravel 11+ **tidak** punya `routes/api.php` dan `routes/channels.php`. Jalankan berurutan di root project:
 
 ```shell
+# 1. API + Sanctum (membuat routes/api.php, prefix /api, middleware group api)
 php artisan install:api
+
+# 2. Broadcasting + Reverb (membuat routes/channels.php, config/reverb.php, env REVERB_*)
+php artisan install:broadcasting --reverb
+
+# 3. Package lain
+composer require spatie/laravel-permission laravel/ai maatwebsite/excel barryvdh/laravel-dompdf
+
+# 4. Publish config + migration
+php artisan vendor:publish --provider="Spatie\Permission\PermissionServiceProvider"
+php artisan vendor:publish --provider="Laravel\Ai\AiServiceProvider"
+php artisan vendor:publish --provider="Maatwebsite\Excel\ExcelServiceProvider" --tag=config
+php artisan vendor:publish --provider="Barryvdh\DomPDF\ServiceProvider"
+
+# 5. Migrasi (termasuk tabel package)
+php artisan migrate
 ```
 
-Command ini meng-install Sanctum dan membuat `routes/api.php` (otomatis ber-prefix `/api` dan memakai middleware group `api`).
+Setelah langkah 2, **wajib** ubah registrasi channel di `bootstrap/app.php` agar client API (token Sanctum) bisa auth ke private channel. Lihat 1.9.2.
 
 Catatan:
 
-* Config package berada di `config/dompdf.php` dan `config/excel.php` (hasil publish).
+* Config package berada di `config/sanctum.php`, `config/permission.php`, `config/reverb.php`, `config/ai.php`, `config/excel.php`, dan `config/dompdf.php`.
+* Tabel bawaan package (`personal_access_tokens`, `roles`, `permissions`, `model_has_*`, `role_has_permissions`, `agent_conversations`, `agent_conversation_messages`, `jobs`, `cache`, dst) **dikecualikan** dari aturan prefix `m_` / `t_` dan kolom audit. Jangan rename tabel package.
 
 ---
 
@@ -797,6 +820,333 @@ Checklist review token security:
 
 ---
 
+## 1.9 Standar Realtime (Laravel Reverb)
+
+Realtime (notifikasi, status proses, progress export, streaming AI) memakai **Laravel Reverb** sebagai WebSocket server dan **broadcasting** Laravel.
+
+### 1.9.1 Konfigurasi Environment
+
+```ini
+BROADCAST_CONNECTION=reverb
+
+# Kredensial app (di-generate install:broadcasting, simpan sebagai secret)
+REVERB_APP_ID=
+REVERB_APP_KEY=
+REVERB_APP_SECRET=
+
+# Alamat yang dipakai Laravel & client untuk konek ke Reverb (publik)
+REVERB_HOST=ws.domain-anda.com
+REVERB_PORT=443
+REVERB_SCHEME=https
+
+# Alamat bind server Reverb (internal, di belakang reverse proxy)
+REVERB_SERVER_HOST=0.0.0.0
+REVERB_SERVER_PORT=8080
+```
+
+Aturan:
+
+* Production wajib lewat **TLS** (`wss://`) di belakang reverse proxy (Nginx/Caddy) yang meneruskan ke `REVERB_SERVER_PORT`.
+* Isi `allowed_origins` di `config/reverb.php` hanya dengan domain frontend resmi. **Dilarang** `*` di production.
+* `REVERB_APP_SECRET` tidak boleh dikirim ke frontend; frontend hanya butuh `REVERB_APP_KEY`, host, port, dan scheme.
+* Jalankan server dengan `php artisan reverb:start` di bawah process manager (Supervisor/systemd) dan restart dengan `php artisan reverb:restart` setiap deploy.
+* Event broadcast masuk queue, jadi **queue worker wajib jalan** (`php artisan queue:work`).
+
+### 1.9.2 Auth Private Channel untuk Client API (Sanctum)
+
+`install:broadcasting` mendaftarkan `channels:` di `withRouting`, yang memakai session web. Untuk client API (mobile/SPA dengan Bearer token), **hapus** entry `channels:` dari `withRouting` dan ganti dengan `withBroadcasting`:
+
+```php
+return Application::configure(basePath: dirname(__DIR__))
+    ->withRouting(
+        web: __DIR__.'/../routes/web.php',
+        api: __DIR__.'/../routes/api.php',
+        commands: __DIR__.'/../routes/console.php',
+        health: '/up',
+    )
+    ->withBroadcasting(
+        __DIR__.'/../routes/channels.php',
+        ['prefix' => 'api', 'middleware' => ['api', 'auth:sanctum', 'tenant']],
+    )
+    // ->withMiddleware(...) dan ->withExceptions(...) seperti 1.3.7
+    ->create();
+```
+
+Endpoint auth channel menjadi `POST /api/broadcasting/auth` dengan header `Authorization: Bearer <token>`.
+
+### 1.9.3 Konvensi Channel & Event
+
+* **Semua data bisnis wajib lewat private/presence channel**. Public channel (`Channel`) hanya untuk data yang memang publik.
+* Nama channel wajib ber-scope tenant: `company.{companyId}.<modul>.<resource>.{id}`, contoh `company.12.hris.employee.45`. Untuk notifikasi user: `company.{companyId}.user.{userId}`.
+* Callback di `routes/channels.php` wajib mengecek **user anggota company tersebut** dan **permission** yang sesuai, bukan sekadar `true`.
+* Event disimpan di `app/Events/<Fitur>/`, nama class bentuk lampau + suffix `Event`, contoh `EmployeeUpdatedEvent`.
+* Gunakan `ShouldBroadcast` (lewat queue). `ShouldBroadcastNow` hanya untuk event ringan yang memang harus langsung.
+* Payload wajib minimal dan eksplisit lewat `broadcastWith()` (pakai API Resource, jangan kirim seluruh model). Batas aman pesan WebSocket sekitar 10KB.
+* Nama event di client distandarkan lewat `broadcastAs()` dengan format `<resource>.<aksi>`, contoh `employee.updated`.
+
+Contoh `routes/channels.php`:
+
+```php
+<?php
+
+use App\Models\User;
+use Illuminate\Support\Facades\Broadcast;
+
+Broadcast::channel('company.{companyId}.hris.employee.{employeeId}', function (User $user, int $companyId, int $employeeId) {
+    return $user->companies()->whereKey($companyId)->exists()
+        && $user->can('hris.employee.view');
+});
+
+Broadcast::channel('company.{companyId}.user.{userId}', function (User $user, int $companyId, int $userId) {
+    return $user->id === $userId
+        && $user->companies()->whereKey($companyId)->exists();
+});
+```
+
+(`companies()` adalah relasi membership user-company sesuai implementasi tenant project.)
+
+Contoh event:
+
+```php
+<?php
+
+namespace App\Events\Employee;
+
+use App\Http\Resources\Api\V1\Employee\EmployeeResource;
+use App\Models\Employee\EmployeeModel;
+use Illuminate\Broadcasting\InteractsWithSockets;
+use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Foundation\Events\Dispatchable;
+use Illuminate\Queue\SerializesModels;
+
+class EmployeeUpdatedEvent implements ShouldBroadcast
+{
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+
+    public function __construct(public EmployeeModel $employee) {}
+
+    public function broadcastOn(): array
+    {
+        return [
+            new PrivateChannel("company.{$this->employee->company_id}.hris.employee.{$this->employee->id}"),
+        ];
+    }
+
+    public function broadcastAs(): string
+    {
+        return 'employee.updated';
+    }
+
+    public function broadcastWith(): array
+    {
+        return (new EmployeeResource($this->employee))->resolve();
+    }
+}
+```
+
+Dispatch dari controller/service setelah data tersimpan: `EmployeeUpdatedEvent::dispatch($employee);` atau `broadcast(new EmployeeUpdatedEvent($employee))->toOthers();` jika pengirim tidak perlu menerima event-nya sendiri.
+
+---
+
+## 1.10 Standar AI (Laravel AI SDK)
+
+Fitur AI memakai **Laravel AI SDK** (`laravel/ai`), bukan memanggil HTTP API provider langsung.
+
+### 1.10.1 Konfigurasi
+
+* API key provider hanya di `.env` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, dst). **Dilarang** hardcode atau commit key.
+* Provider dan model default diatur di `config/ai.php`, bukan ditulis di tiap agent.
+* Tabel `agent_conversations` dan `agent_conversation_messages` adalah milik package (lihat pengecualian di 1.1.1).
+
+### 1.10.2 Konvensi Agent & Tool
+
+* Generate dengan `php artisan make:agent` (tambahkan `--structured` jika butuh output terstruktur).
+* Folder: `app/Ai/Agents/<Fitur>/` dan `app/Ai/Tools/<Fitur>/`.
+* Penamaan wajib bersuffix: `NamaFiturAgent` (contoh `EmployeeSummaryAgent`) dan `NamaAksiTool` (contoh `FindEmployeeTool`).
+* Agent dipanggil dari controller/service, response tetap dikembalikan lewat response macro (1.5).
+
+Aturan wajib:
+
+* **Structured output** (`HasStructuredOutput` + `schema()`) wajib untuk hasil yang disimpan ke database atau diproses kode. Teks bebas hanya untuk ditampilkan langsung ke user.
+* Hasil AI diperlakukan sebagai **input tidak tepercaya**: validasi dulu (tipe, range, enum) sebelum disimpan.
+* **Tool wajib ter-scope tenant & permission**: setiap query di tool harus difilter ke company aktif dan dicek permission user, sama seperti endpoint biasa. Agent tidak boleh bisa membaca data company lain.
+* Tool yang mengubah/menghapus data wajib memakai **human tool approval** dari SDK, bukan langsung dieksekusi.
+* Jangan kirim data sensitif (password, token, NIK, gaji, data kesehatan) ke provider kecuali memang dibutuhkan dan sudah disetujui kebijakan perusahaan.
+* Prompt yang lama (> beberapa detik) wajib async: `->queue(...)` atau `->broadcastOnQueue($prompt, new PrivateChannel(...))` untuk streaming hasil ke client lewat Reverb (channel private ber-scope tenant, lihat 1.9.3).
+* Endpoint AI wajib diberi rate limiter khusus (`throttle:ai`), karena tiap request berbiaya.
+* Test wajib memakai fake, **dilarang** memanggil provider asli di test: `EmployeeSummaryAgent::fake([...])`.
+
+Contoh agent terstruktur:
+
+```php
+<?php
+
+namespace App\Ai\Agents\Employee;
+
+use Illuminate\Contracts\JsonSchema\JsonSchema;
+use Laravel\Ai\Contracts\Agent;
+use Laravel\Ai\Contracts\HasStructuredOutput;
+use Laravel\Ai\Promptable;
+use Stringable;
+
+class EmployeeSummaryAgent implements Agent, HasStructuredOutput
+{
+    use Promptable;
+
+    public function instructions(): Stringable|string
+    {
+        return 'Ringkas performa karyawan berdasarkan data KPI yang diberikan. Jawab dalam Bahasa Indonesia.';
+    }
+
+    public function schema(JsonSchema $schema): array
+    {
+        return [
+            'summary' => $schema->string()->required(),
+            'score' => $schema->integer()->min(1)->max(10)->required(),
+        ];
+    }
+}
+```
+
+Pemakaian di controller:
+
+```php
+$result = (new EmployeeSummaryAgent)->prompt($kpiText);
+
+return response()->success([
+    'summary' => $result['summary'],
+    'score' => $result['score'],
+], 'Ringkasan berhasil dibuat');
+```
+
+---
+
+## 1.11 Standar Export/Import (Laravel Excel 4) & PDF (DomPDF)
+
+### 1.11.1 Laravel Excel 4
+
+* Folder & penamaan: `app/Exports/<Fitur>/NamaFiturExport.php` dan `app/Imports/<Fitur>/NamaFiturImport.php`.
+* Laravel Excel 4 **fully typed**: semua method concern wajib punya return type (`query(): Builder`, `headings(): array`, `map(mixed $row): array`, dst). Class lama dari 3.1 tanpa return type akan error.
+* Export wajib `FromQuery` (bukan `FromCollection` untuk data besar), dengan **eager loading** dan **scope tenant** di query.
+* Export/import besar wajib queued (`ShouldQueue`, opsional `ShouldBatch`), simpan ke storage, lalu kabari user lewat notifikasi / event Reverb. Request HTTP tidak boleh menunggu file besar selesai.
+* Import wajib memakai `WithValidation` (aturan sama ketatnya dengan Form Request) dan `WithChunkReading` untuk file besar.
+* Job queue **tidak punya** `auth()->id()`. Kirim user ID dan company ID lewat constructor, lalu isi kolom audit secara eksplisit (trait `HasAuditColumns` memakai `??=`, jadi nilai eksplisit dipertahankan).
+* Laravel 13: import queued boleh memakai attribute `#[Queue('imports')]` dan `#[Connection('redis')]`.
+
+Contoh export:
+
+```php
+<?php
+
+namespace App\Exports\Kategori;
+
+use App\Models\Kategori\KategoriModel;
+use Illuminate\Database\Eloquent\Builder;
+use Maatwebsite\Excel\Concerns\Exportable;
+use Maatwebsite\Excel\Concerns\FromQuery;
+use Maatwebsite\Excel\Concerns\WithHeadings;
+use Maatwebsite\Excel\Concerns\WithMapping;
+
+class KategoriExport implements FromQuery, WithHeadings, WithMapping
+{
+    use Exportable;
+
+    public function query(): Builder
+    {
+        return KategoriModel::query()->orderBy('nama');
+    }
+
+    public function headings(): array
+    {
+        return ['ID', 'Nama', 'Dibuat'];
+    }
+
+    public function map(mixed $row): array
+    {
+        return [$row->id, $row->nama, $row->created_at?->toDateTimeString()];
+    }
+}
+```
+
+Contoh import (queued, audit eksplisit):
+
+```php
+<?php
+
+namespace App\Imports\Kategori;
+
+use App\Models\Kategori\KategoriModel;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\Eloquent\Model;
+use Maatwebsite\Excel\Concerns\ToModel;
+use Maatwebsite\Excel\Concerns\WithChunkReading;
+use Maatwebsite\Excel\Concerns\WithHeadingRow;
+use Maatwebsite\Excel\Concerns\WithValidation;
+
+class KategoriImport implements ToModel, WithHeadingRow, WithValidation, WithChunkReading, ShouldQueue
+{
+    public function __construct(private int $userId) {}
+
+    public function model(array $row): ?Model
+    {
+        $kategori = new KategoriModel(['nama' => $row['nama']]);
+        $kategori->created_by = $this->userId; // audit tidak fillable, isi eksplisit
+
+        return $kategori;
+    }
+
+    public function rules(): array
+    {
+        return ['nama' => ['required', 'string', 'max:100']];
+    }
+
+    public function chunkSize(): int
+    {
+        return 500;
+    }
+}
+```
+
+Pemakaian di controller:
+
+```php
+// Download langsung (data kecil)
+return Excel::download(new KategoriExport, 'kategori.xlsx');
+
+// Import queued
+Excel::queueImport(new KategoriImport($request->user()->id), $request->file('file'));
+
+return response()->success([], 'Import sedang diproses');
+```
+
+### 1.11.2 PDF (barryvdh/laravel-dompdf 3)
+
+* Gunakan facade `Barryvdh\DomPDF\Facade\Pdf`.
+* Template di `resources/views/pdf/<fitur>/<nama>.blade.php`, contoh `pdf/invoice/detail.blade.php`.
+* Data untuk view disiapkan di controller/service (eager loaded). View PDF **dilarang** melakukan query.
+* Keamanan (default DomPDF 3, **jangan diubah**): di `config/dompdf.php` bagian `options`, `enable_remote => false` dan `enable_php => false`. Gambar/logo dimuat dari path lokal (`public_path()` / `storage_path()`) atau base64, bukan URL remote.
+* Jangan render HTML dari input user tanpa escape (`{{ }}`, bukan `{!! !!}`).
+* PDF berat atau massal dibuat di queue job, disimpan ke storage, lalu user diberi link unduh.
+
+Contoh:
+
+```php
+use Barryvdh\DomPDF\Facade\Pdf;
+
+$invoice = InvoiceModel::with(['customer', 'items'])->findOrFail($id);
+
+return Pdf::loadView('pdf.invoice.detail', ['invoice' => $invoice])
+    ->setPaper('a4', 'portrait')
+    ->download("invoice-{$invoice->nomor}.pdf");
+```
+
+### 1.11.3 Pengecualian Response Macro
+
+Endpoint yang mengembalikan **file** (Excel/PDF download/stream) adalah satu-satunya pengecualian aturan 1.5: response berupa binary file, bukan JSON macro. Error pada endpoint tersebut (404, 403, 422) tetap memakai macro / format standar.
+
+---
+
 ## 2. Konvensi Penamaan Database (Table Naming)
 
 ### 2.1 Tabel Master
@@ -1122,9 +1472,39 @@ app/
 │   ├── AppServiceProvider.php
 │   └── ResponseMacroServiceProvider.php
 │
+├── Events/
+│   └── Employee/
+│       └── EmployeeUpdatedEvent.php
+│
+├── Ai/
+│   ├── Agents/
+│   │   └── Employee/
+│   │       └── EmployeeSummaryAgent.php
+│   └── Tools/
+│       └── Employee/
+│           └── FindEmployeeTool.php
+│
+├── Exports/
+│   └── Kategori/
+│       └── KategoriExport.php
+│
+├── Imports/
+│   └── Kategori/
+│       └── KategoriImport.php
+│
 bootstrap/
-├── app.php          # alias middleware + exception rendering
+├── app.php          # alias middleware + exception rendering + withBroadcasting
 └── providers.php    # registrasi provider
+│
+routes/
+├── api.php          # dari install:api
+└── channels.php     # dari install:broadcasting (auth private channel)
+│
+resources/
+└── views/
+    └── pdf/
+        └── invoice/
+            └── detail.blade.php
 │
 database/
 └── seeders/
@@ -1243,6 +1623,10 @@ DetailPostResource
 | Nama tabel di Model | Wajib eksplisit: `#[Table('m_xxxx')]` (L13) / `$table` (L12) |
 | Middleware & Exception | Didaftarkan di `bootstrap/app.php` |
 | N+1 guard       | `Model::preventLazyLoading()` di `AppServiceProvider` |
+| Realtime        | Reverb, private channel `company.{id}.<modul>...`, event suffix `Event` |
+| AI              | Laravel AI SDK, `app/Ai/Agents` suffix `Agent`, structured output, fake di test |
+| Excel           | Laravel Excel 4 (typed), `app/Exports` / `app/Imports`, queued untuk data besar |
+| PDF             | DomPDF 3, `Pdf::loadView('pdf.<fitur>.<nama>')`, remote access tetap off |
 
 ---
 
