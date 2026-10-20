@@ -225,7 +225,53 @@ Setiap modul di-gate dengan middleware:
 
 * `module:<moduleKey>` (contoh `module:hris`, `module:finance`)
 
-Jika modul tidak aktif untuk company, API mengembalikan **403**.
+Jika modul tidak aktif untuk company, API mengembalikan **403** dengan format macro (lewat handler di 1.3.7).
+
+Urutan middleware **wajib**: `auth:sanctum` → `tenant` → `module:<key>` → `permission:<key>`. Middleware `module` dan `permission` butuh company aktif yang diset oleh `tenant`, jadi tidak boleh dipasang sebelum `tenant`. Dengan urutan ini, client selalu menerima alasan yang paling mendasar dulu (401 sebelum 403 tenant, 403 tenant sebelum 403 modul, dst).
+
+Contoh implementasi (tabel `t_company_module_det` berisi `company_id`, `module_key`, `is_active`; sesuaikan dengan model plan/entitlement project):
+
+```php
+<?php
+
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+class EnsureModuleIsActive
+{
+    /**
+     * Pemakaian di route: ->middleware('module:hris')
+     * Wajib dipasang SETELAH middleware tenant (butuh company aktif).
+     */
+    public function handle(Request $request, Closure $next, string $module): Response
+    {
+        $company = $request->attributes->get('company');
+
+        if (! $company?->hasActiveModule($module)) {
+            abort(403, "Modul {$module} tidak aktif untuk paket company ini");
+        }
+
+        return $next($request);
+    }
+}
+```
+
+```php
+// Model company
+public function hasActiveModule(string $module): bool
+{
+    return DB::table('t_company_module_det')
+        ->where('company_id', $this->id)
+        ->where('module_key', $module)
+        ->where('is_active', true)
+        ->exists();
+}
+```
+
+Middleware custom **wajib** menolak dengan `abort($status, 'pesan')` (atau return response macro), jangan `return response()->json([...])` manual, agar format error tetap seragam.
 
 ### 1.3.4 Permission Check (RBAC)
 
@@ -325,11 +371,11 @@ use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\Request;
-use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
-use Symfony\Component\HttpKernel\Exception\MethodNotAllowedHttpException;
-use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
-use Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException;
+use Illuminate\Validation\ValidationException;
+use Spatie\Permission\Exceptions\UnauthorizedException;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -353,36 +399,61 @@ return Application::configure(basePath: dirname(__DIR__))
             fn (Request $request) => $request->is('api/*') || $request->expectsJson()
         );
 
-        // Petakan exception umum ke response macro standar (lihat 1.5)
-        $exceptions->render(function (NotFoundHttpException $e, Request $request) {
-            if ($request->is('api/*')) {
-                return response()->notFound();
-            }
-        });
+        // Urutan penting: callback pertama yang cocok & mengembalikan response yang dipakai.
+
+        // 1. 401: belum login, token salah, atau token expired
         $exceptions->render(function (AuthenticationException $e, Request $request) {
             if ($request->is('api/*')) {
                 return response()->unauthorized();
             }
         });
-        $exceptions->render(function (AccessDeniedHttpException $e, Request $request) {
+
+        // 2. 403 dari middleware permission Spatie (pesan dibuat seragam)
+        $exceptions->render(function (UnauthorizedException $e, Request $request) {
             if ($request->is('api/*')) {
-                return response()->forbidden();
+                return response()->forbidden(['Anda tidak memiliki akses untuk aksi ini'], 'Forbidden');
             }
         });
-        $exceptions->render(function (\Spatie\Permission\Exceptions\UnauthorizedException $e, Request $request) {
-            if ($request->is('api/*')) {
-                return response()->forbidden(['Anda tidak memiliki akses untuk aksi ini']);
+
+        // 3. Semua HTTP error lain: abort() dari middleware/controller, 403 policy, 404, 405, 409, 429, 503, dst
+        $exceptions->render(function (HttpExceptionInterface $e, Request $request) {
+            if (! $request->is('api/*')) {
+                return null;
             }
+
+            $status = $e->getStatusCode();
+
+            // 404/405 bawaan framework membawa nama model/route, jangan diteruskan ke client
+            $message = in_array($status, [404, 405], true) ? '' : $e->getMessage();
+            $args = $message === '' ? [] : [[$message], $message];
+
+            $response = match ($status) {
+                400 => response()->badRequest(...$args),
+                401 => response()->unauthorized(...$args),
+                403 => response()->forbidden(...$args),
+                404 => response()->notFound(...$args),
+                405 => response()->methodNotAllowed(...$args),
+                409 => response()->conflict(...$args),
+                429 => response()->tooManyRequests(...$args),
+                503 => response()->serviceUnavailable(...$args),
+                default => response()->failed([$message ?: 'Error'], $message, $status),
+            };
+
+            // Pertahankan header seperti Retry-After (429) dan Allow (405)
+            return $response->withHeaders($e->getHeaders());
         });
-        $exceptions->render(function (MethodNotAllowedHttpException $e, Request $request) {
-            if ($request->is('api/*')) {
-                return response()->methodNotAllowed();
+
+        // 4. Fallback 500 untuk exception yang tidak tertangani (detail hanya saat APP_DEBUG=true)
+        $exceptions->render(function (Throwable $e, Request $request) {
+            if (! $request->is('api/*') || $e instanceof ValidationException || $e instanceof HttpResponseException) {
+                return null; // 422 tetap format default Laravel
             }
-        });
-        $exceptions->render(function (TooManyRequestsHttpException $e, Request $request) {
-            if ($request->is('api/*')) {
-                return response()->tooManyRequests();
-            }
+
+            return response()->internalServerError(
+                ['Terjadi kesalahan pada server'],
+                'Internal Server Error',
+                config('app.debug') ? ['exception' => $e::class, 'detail' => $e->getMessage(), 'file' => $e->getFile().':'.$e->getLine()] : [],
+            );
         });
     })
     ->create();
@@ -390,9 +461,32 @@ return Application::configure(basePath: dirname(__DIR__))
 
 Catatan:
 
-* `ModelNotFoundException` (dari `findOrFail`) otomatis dikonversi Laravel menjadi `NotFoundHttpException`, jadi controller **tidak perlu** `try/catch` hanya untuk 404.
+* **Semua error dari middleware dan controller keluar dengan format macro yang sama**, termasuk `abort(403, '...')`, 403 dari policy/Gate, `module:`, `tenant`, `permission:`, `throttle:`, 404, 405, 409, 503 (maintenance mode), dan 500.
+* `ModelNotFoundException` (dari `findOrFail`) dan `AuthorizationException` (dari policy) otomatis dikonversi Laravel menjadi `HttpException` 404/403 sebelum callback dijalankan, jadi ikut tertangkap handler nomor 3. Controller **tidak perlu** `try/catch` hanya untuk 404/403.
+* Pesan 404/405 bawaan framework sengaja dibuang karena berisi nama model/route (`No query results for model [App\Models\...]`). Status lain meneruskan pesan dari `abort($status, 'pesan')`, jadi middleware cukup `abort(403, 'Pesan yang jelas')`.
+* Header bawaan tetap dikirim (`Retry-After` untuk 429, `Allow` untuk 405), supaya frontend tahu kapan boleh retry.
+* Error 500 tidak pernah membocorkan detail (SQL, path) di production. Detail hanya muncul di `settings` saat `APP_DEBUG=true`, dan exception tetap tercatat di log.
 * `ValidationException` tetap memakai format default Laravel (lihat 1.4), tidak dipetakan ke macro.
-* Spatie `UnauthorizedException` (dilempar middleware `permission:`) dipetakan ke `response()->forbidden()` supaya 403 dari RBAC formatnya sama dengan error lain.
+* **Urutan callback penting**: Laravel memakai callback pertama yang cocok dan mengembalikan response. Callback spesifik (`AuthenticationException`, Spatie `UnauthorizedException`) wajib di atas `HttpExceptionInterface`, dan `Throwable` wajib paling bawah.
+
+Peta error API (yang diterima frontend):
+
+| Sumber | Status | `message` / `errors` |
+|---|---|---|
+| Tanpa token / token salah / expired (`auth:sanctum`) | 401 | `Unauthorized` |
+| Bukan anggota company / header company salah (`tenant`) | 403 | `Company tidak valid atau Anda bukan anggota company ini` |
+| Modul tidak aktif di paket company (`module:`) | 403 | `Modul <key> tidak aktif untuk paket company ini` |
+| Tidak punya permission (`permission:`) | 403 | `Anda tidak memiliki akses untuk aksi ini` |
+| Policy / Gate / `abort(403, ...)` | 403 | pesan dari kode |
+| Data / route tidak ada | 404 | `Not Found` |
+| Method salah | 405 | `Method Not Allowed` |
+| Konflik (mis. role masih dipakai) | 409 | pesan dari kode |
+| Validasi gagal | 422 | format default Laravel (1.4) |
+| Rate limit (`throttle:`) | 429 | `Too Many Attempts.` + header `Retry-After` |
+| Maintenance (`php artisan down`) | 503 | `Service Unavailable` |
+| Exception tak tertangani | 500 | `Terjadi kesalahan pada server` |
+
+Test wajib (`tests/Feature/ErrorFormatTest.php`): tiap baris tabel di atas mengembalikan struktur `status_code`, `message`, `errors`, `settings` dengan status yang benar, `Retry-After` ada di 429, dan 500 tidak mengandung detail exception saat `APP_DEBUG=false`.
 * Laravel 13: middleware juga boleh dideklarasikan di controller memakai attribute `#[Middleware('permission:hris.employee.view', only: ['index'])]` (`Illuminate\Routing\Attributes\Controllers\Middleware`). Untuk Laravel 12 gunakan interface `HasMiddleware` + static `middleware()`. Pilih **satu** pola per project (route-level atau controller-level), jangan dicampur.
 
 Rekomendasi struktur controller/resource per versi:

@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Marketplace standar Laravel API — naming convention, multi-tenant, RBAC, response macro, security",
-    "version": "1.3.0"
+    "version": "1.3.1"
   },
   "plugins": [
     {
       "name": "laravel-api-standards",
       "source": "./",
       "description": "Standar arsitektur, naming convention, dan struktur folder Laravel API (multi-tenant, RBAC, response macro, security, versioning API, dll).",
-      "version": "1.3.0"
+      "version": "1.3.1"
     }
   ]
 }
