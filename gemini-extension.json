@@ -1,0 +1,5 @@
+{
+  "name": "laravel-api-standards",
+  "version": "1.3.0",
+  "description": "Standar arsitektur, naming convention, RBAC dinamis, dan struktur folder Laravel 13 API."
+}

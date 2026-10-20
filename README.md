@@ -9,7 +9,7 @@ Sanctum 4, Spatie Laravel Permission 8, Reverb (realtime), Laravel AI SDK,
 Laravel Excel 4, DomPDF 3, PHP attributes model (`#[Table]`,
 `#[Fillable]`), konfigurasi `bootstrap/app.php`, dan guard N+1 bawaan Laravel.
 
-Mencakup: multi-tenant (company/plan/RBAC), versioning API, Form Request wajib,
+Mencakup: multi-tenant (company/plan), RBAC dinamis (role dibuat user, permission per role), konfirmasi stack sebelum install, versioning API, Form Request wajib,
 response macro standar, anti N+1, security/injection prevention, token security
 Sanctum, naming tabel (`m_`, `t_`, `_det`), naming model (`...Model`), dan struktur
 folder per fitur.
@@ -36,24 +36,51 @@ Update ke versi terbaru:
 /plugin update laravel-api-standards
 ```
 
-## Install (agent selain Claude Code — Cursor, Cline, Windsurf, Aider, Codex, dll)
+## Install (semua agent: Codex, Gemini CLI, Antigravity, Cursor, Copilot, Windsurf, dll)
 
-Agent-agent ini belum punya sistem plugin seperti Claude Code, jadi pakai file
-`AGENTS.md` (konvensi universal yang mereka baca otomatis dari root project):
+Jalankan di root project Laravel kamu:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arigunawanj/laravel-api-standards/main/install.sh | bash
 ```
 
-Jalankan di root project Laravel kamu. Ini menyalin `AGENTS.md` ke root project
-+ `SKILL.md` ke `.claude/skills/` (fallback kalau `/plugin` belum tersedia di
-versi Claude Code kamu).
+Yang dipasang:
 
-Opsi lain:
+| Agent | Lokasi |
+|---|---|
+| Claude Code | `.claude/skills/laravel-api-standards/` |
+| Codex | `.agents/skills/laravel-api-standards/` + `AGENTS.md` |
+| Gemini CLI | `.gemini/skills/laravel-api-standards/` + `GEMINI.md` |
+| Antigravity | `.agent/skills/laravel-api-standards/` |
+| Cursor, GitHub Copilot, Windsurf, Cline, Aider | `AGENTS.md` (dibaca otomatis dari root project) |
+
+`AGENTS.md`, `CLAUDE.md`, dan `GEMINI.md` yang sudah ada **tidak ditimpa**, hanya
+ditambahkan pointer ke standar ini.
+
+Install global (sekali pasang, kepakai di semua project untuk Claude Code, Codex,
+Gemini CLI, dan Antigravity):
+
 ```bash
-# Install global — otomatis kepakai di semua project Claude Code
 curl -fsSL https://raw.githubusercontent.com/arigunawanj/laravel-api-standards/main/install.sh | bash -s -- --global
 ```
+
+Gemini CLI juga bisa lewat extension:
+
+```bash
+gemini extensions install https://github.com/arigunawanj/laravel-api-standards
+```
+
+## Cara kerja saat dipakai agent
+
+- **Konfirmasi dulu, baru install.** Sebelum memasang package opsional (Reverb,
+  AI SDK, Excel, PDF), agent wajib cek yang sudah terpasang lalu menanyakan ke kamu
+  mana yang dibutuhkan. Jawabanmu dicatat di `AGENTS.md` (`## Stack Terpilih`)
+  supaya agent lain/sesi berikutnya tidak bertanya ulang.
+- **Command non-interaktif.** Semua `artisan`/`composer` memakai `--no-interaction`
+  dan flag eksplisit, jadi tidak macet di agent yang tidak bisa menjawab prompt.
+- **RBAC dinamis.** Owner/admin company bisa membuat role sendiri dengan
+  permission berbeda-beda per role (Spatie teams per company, anti privilege
+  escalation), lewat endpoint `/api/v1/rbac/*`.
 
 ## Struktur repo
 

@@ -19,6 +19,85 @@ Dokumentasi ini digunakan sebagai **standar awal (awalan / prompt)** dalam membu
 
 ---
 
+## 0. Protokol Agent (Wajib Dibaca Sebelum Install Apa Pun)
+
+Standar ini dipakai oleh berbagai AI coding agent (Claude Code, Codex, Gemini CLI, Antigravity, Cursor, Copilot, Windsurf, dll). Aturan di bagian ini berlaku sama untuk semua agent.
+
+### 0.1 Konfirmasi Stack Sebelum Install
+
+**Dilarang asal install package.** Sebelum menjalankan `composer require`, `php artisan install:*`, atau `vendor:publish`:
+
+1. **Cek dulu yang sudah terpasang**: baca `composer.json`, dan cek keberadaan `routes/api.php`, `routes/channels.php`, `config/permission.php`, `config/reverb.php`, `config/ai.php`, `config/excel.php`, `config/dompdf.php`. Package yang sudah ada tidak di-install ulang.
+2. **Cek keputusan sebelumnya**: jika `AGENTS.md` di root project sudah punya bagian `## Stack Terpilih`, ikuti itu dan **jangan tanya ulang**.
+3. **Tanya user sekali** (satu pertanyaan berisi daftar pilihan), lalu **berhenti dan tunggu jawaban**. Jangan menebak dan jangan lanjut install sebelum dijawab.
+4. **Install hanya yang dipilih**, lalu catat keputusan ke `AGENTS.md` (lihat 0.3).
+
+Paket inti (dibutuhkan oleh standar ini, tetap diinformasikan ke user sebelum dipasang):
+
+* `install:api` + Sanctum: hanya jika `routes/api.php` belum ada.
+* Spatie Laravel Permission: untuk RBAC (1.3.4 dan 1.3.8).
+
+Paket opsional (**hanya dipasang jika user memilih**):
+
+| Kode | Package | Dipakai untuk |
+|---|---|---|
+| `reverb` | `laravel/reverb` (via `install:broadcasting`) | Realtime: notifikasi, progress, chat, streaming AI |
+| `ai` | `laravel/ai` | Fitur AI: ringkasan, klasifikasi, agent, embeddings |
+| `excel` | `maatwebsite/excel` | Export/import Excel/CSV |
+| `pdf` | `barryvdh/laravel-dompdf` | Export PDF (invoice, laporan, slip) |
+
+Template pertanyaan (sesuaikan isinya dengan yang belum terpasang):
+
+```text
+Sebelum saya setup, fitur mana yang dibutuhkan project ini? (boleh pilih lebih dari satu, atau "tidak ada")
+
+Inti (akan dipasang): API + Sanctum, Spatie Permission (RBAC)
+
+Opsional:
+1. Realtime / WebSocket (Laravel Reverb)
+2. Fitur AI (Laravel AI SDK) - jika ya, provider apa? (OpenAI / Anthropic / Gemini / lainnya)
+3. Export/Import Excel (Laravel Excel 4)
+4. Export PDF (DomPDF)
+```
+
+Cara bertanya per agent:
+
+* Jika agent punya tool pertanyaan interaktif (mis. `AskUserQuestion` di Claude Code, atau fitur ask/confirm bawaan agent lain), gunakan tool itu dengan mode multi-pilih.
+* Jika tidak ada, tulis pertanyaan di chat dan akhiri giliran untuk menunggu jawaban.
+* Pada mode non-interaktif / otomatis (CI, agent background tanpa user), **jangan install paket opsional**. Pasang inti saja dan laporkan bahwa paket opsional menunggu keputusan user.
+
+Jika user hanya minta review kode atau perubahan kecil, **jangan** menawarkan install apa pun.
+
+### 0.2 Command Wajib Non-Interaktif
+
+Agent tidak bisa menjawab prompt interaktif artisan/composer, jadi semua command wajib memakai flag eksplisit:
+
+```shell
+php artisan install:api --no-interaction
+php artisan install:broadcasting --reverb --without-node --no-interaction
+composer require <package> --no-interaction
+php artisan vendor:publish --provider="..." --no-interaction
+php artisan migrate --no-interaction
+```
+
+### 0.3 Catat Keputusan Stack
+
+Setelah user menjawab, tambahkan (atau perbarui) bagian ini di `AGENTS.md` root project agar sesi/agent berikutnya tidak bertanya ulang:
+
+```markdown
+## Stack Terpilih
+
+- Inti: Sanctum, Spatie Permission (teams = company)
+- Reverb: ya
+- AI SDK: ya (provider: OpenAI)
+- Excel: tidak
+- PDF: ya
+```
+
+Bagian standar untuk package yang **tidak** dipilih (mis. 1.9 Reverb, 1.10 AI, 1.11 Excel/PDF) diabaikan, dan agent tidak membuat file/folder untuk package tersebut.
+
+---
+
 ## 1. Tujuan
 
 * Menyeragamkan **penamaan database, model, controller, seeder, dan resource**
@@ -37,44 +116,53 @@ Dokumentasi ini digunakan sebagai **standar awal (awalan / prompt)** dalam membu
 
 ---
 
-## 1.1 Stack Tambahan (Package Wajib)
+## 1.1 Stack (Inti + Opsional)
 
-Backend ini menggunakan Laravel + beberapa package tambahan:
+Backend ini menggunakan Laravel + package berikut. Paket opsional **hanya** dipasang setelah dikonfirmasi user (lihat 0.1).
 
-| Package | Versi | Fungsi |
-|---|---|---|
-| `laravel/sanctum` | ^4 | API authentication (Bearer token) |
-| `spatie/laravel-permission` | ^8 | RBAC |
-| `laravel/reverb` | ^1.12 | WebSocket server untuk realtime / broadcasting |
-| `laravel/ai` | ^1.3 | Laravel AI SDK (agent, structured output, embeddings, dll) |
-| `maatwebsite/excel` | ^4.0 | Export/import Excel (Laravel Excel 4, PhpSpreadsheet 5) |
-| `barryvdh/laravel-dompdf` | ^3.1 | Export PDF (DomPDF 3) |
+| Package | Versi | Status | Fungsi |
+|---|---|---|---|
+| `laravel/sanctum` | ^4 | Inti | API authentication (Bearer token) |
+| `spatie/laravel-permission` | ^8 | Inti | RBAC dinamis per company |
+| `laravel/reverb` | ^1.12 | Opsional | WebSocket server untuk realtime / broadcasting |
+| `laravel/ai` | ^1.3 | Opsional | Laravel AI SDK (agent, structured output, embeddings, dll) |
+| `maatwebsite/excel` | ^4.0 | Opsional | Export/import Excel (Laravel Excel 4, PhpSpreadsheet 5) |
+| `barryvdh/laravel-dompdf` | ^3.1 | Opsional | Export PDF (DomPDF 3) |
 
 ### 1.1.1 Urutan Setup Project Baru
 
-Skeleton Laravel 11+ **tidak** punya `routes/api.php` dan `routes/channels.php`. Jalankan berurutan di root project:
+Skeleton Laravel 11+ **tidak** punya `routes/api.php` dan `routes/channels.php`. Jalankan berurutan di root project, **lewati langkah untuk package yang tidak dipilih atau sudah terpasang**:
 
 ```shell
-# 1. API + Sanctum (membuat routes/api.php, prefix /api, middleware group api)
-php artisan install:api
+# 1. [Inti] API + Sanctum (membuat routes/api.php, prefix /api, middleware group api)
+php artisan install:api --no-interaction
 
-# 2. Broadcasting + Reverb (membuat routes/channels.php, config/reverb.php, env REVERB_*)
-php artisan install:broadcasting --reverb
+# 2. [Inti] Spatie Permission. Set 'teams' => true dan 'team_foreign_key' => 'company_id'
+#    di config/permission.php SEBELUM migrate (lihat 1.3.8)
+composer require spatie/laravel-permission --no-interaction
+php artisan vendor:publish --provider="Spatie\Permission\PermissionServiceProvider" --no-interaction
 
-# 3. Package lain
-composer require spatie/laravel-permission laravel/ai maatwebsite/excel barryvdh/laravel-dompdf
+# 3. [Opsional: reverb] Broadcasting + Reverb (routes/channels.php, config/reverb.php, env REVERB_*)
+php artisan install:broadcasting --reverb --without-node --no-interaction
 
-# 4. Publish config + migration
-php artisan vendor:publish --provider="Spatie\Permission\PermissionServiceProvider"
-php artisan vendor:publish --provider="Laravel\Ai\AiServiceProvider"
-php artisan vendor:publish --provider="Maatwebsite\Excel\ExcelServiceProvider" --tag=config
-php artisan vendor:publish --provider="Barryvdh\DomPDF\ServiceProvider"
+# 4. [Opsional: ai]
+composer require laravel/ai --no-interaction
+php artisan vendor:publish --provider="Laravel\Ai\AiServiceProvider" --no-interaction
 
-# 5. Migrasi (termasuk tabel package)
-php artisan migrate
+# 5. [Opsional: excel]
+composer require maatwebsite/excel --no-interaction
+php artisan vendor:publish --provider="Maatwebsite\Excel\ExcelServiceProvider" --tag=config --no-interaction
+
+# 6. [Opsional: pdf]
+composer require barryvdh/laravel-dompdf --no-interaction
+php artisan vendor:publish --provider="Barryvdh\DomPDF\ServiceProvider" --no-interaction
+
+# 7. Migrasi (termasuk tabel package) + seed katalog permission
+php artisan migrate --no-interaction
+php artisan db:seed --class="Database\Seeders\Rbac\PermissionSeeder" --no-interaction
 ```
 
-Setelah langkah 2, **wajib** ubah registrasi channel di `bootstrap/app.php` agar client API (token Sanctum) bisa auth ke private channel. Lihat 1.9.2.
+Jika Reverb dipilih, setelah langkah 3 **wajib** ubah registrasi channel di `bootstrap/app.php` agar client API (token Sanctum) bisa auth ke private channel. Lihat 1.9.2.
 
 Catatan:
 
@@ -161,7 +249,7 @@ Catatan:
 * Jika membership `is_owner = true` maka bypass permission.
 * Assign role/permission mengikuti pola Spatie (`assignRole`, `givePermissionTo`).
 * Permission check gunakan kemampuan native Laravel/Gate yang terintegrasi (`can`) sesuai integrasi Spatie.
-* Jika role/permission berbeda per company, aktifkan fitur **teams** Spatie (`'teams' => true` di `config/permission.php`) dan set konteks di middleware `tenant` dengan `setPermissionsTeamId($companyId)`.
+* Role dibuat per company, jadi fitur **teams** Spatie **wajib** aktif dengan `company_id` sebagai team key. Detail lengkap, termasuk role dinamis yang dibuat user, ada di 1.3.8.
 * Permission key boleh berupa string atau `BackedEnum` (v8), contoh enum `Permission::HrisEmployeeView`.
 
 ### 1.3.5 Grouping API V1 per Modul
@@ -281,6 +369,11 @@ return Application::configure(basePath: dirname(__DIR__))
                 return response()->forbidden();
             }
         });
+        $exceptions->render(function (\Spatie\Permission\Exceptions\UnauthorizedException $e, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->forbidden(['Anda tidak memiliki akses untuk aksi ini']);
+            }
+        });
         $exceptions->render(function (MethodNotAllowedHttpException $e, Request $request) {
             if ($request->is('api/*')) {
                 return response()->methodNotAllowed();
@@ -299,7 +392,7 @@ Catatan:
 
 * `ModelNotFoundException` (dari `findOrFail`) otomatis dikonversi Laravel menjadi `NotFoundHttpException`, jadi controller **tidak perlu** `try/catch` hanya untuk 404.
 * `ValidationException` tetap memakai format default Laravel (lihat 1.4), tidak dipetakan ke macro.
-* Spatie `UnauthorizedException` adalah `HttpException` 403; jika ingin format macro juga, tambahkan `render` untuk `\Spatie\Permission\Exceptions\UnauthorizedException`.
+* Spatie `UnauthorizedException` (dilempar middleware `permission:`) dipetakan ke `response()->forbidden()` supaya 403 dari RBAC formatnya sama dengan error lain.
 * Laravel 13: middleware juga boleh dideklarasikan di controller memakai attribute `#[Middleware('permission:hris.employee.view', only: ['index'])]` (`Illuminate\Routing\Attributes\Controllers\Middleware`). Untuk Laravel 12 gunakan interface `HasMiddleware` + static `middleware()`. Pilih **satu** pola per project (route-level atau controller-level), jangan dicampur.
 
 Rekomendasi struktur controller/resource per versi:
@@ -316,6 +409,510 @@ Tujuan:
 * Client lama tetap jalan.
 * Pengembangan fitur baru lebih aman.
 * Migrasi antar versi lebih terkontrol.
+
+### 1.3.8 RBAC Dinamis: Role Dibuat User, Permission Berbeda per Role
+
+Kebutuhan: admin/owner company bisa **membuat role sendiri** (mis. "Staff HR", "Manager HR", "Finance Viewer") lalu memilih **permission yang berbeda-beda untuk tiap role**, dan meng-assign role ke user. Role milik satu company tidak terlihat dan tidak bisa dipakai company lain.
+
+Prinsip:
+
+* **Permission didefinisikan di kode** (katalog enum + seeder), tidak bisa dibuat lewat API. Middleware route mengacu ke nama permission ini, jadi permission buatan user tidak akan pernah dicek oleh kode mana pun.
+* **Role dibuat user lewat API**, per company, dan isinya dipilih dari katalog permission.
+* Satu user boleh punya beberapa role; permission efektif = gabungan permission dari semua role-nya.
+* Format nama permission: `<modul>.<resource>.<aksi>`, contoh `hris.employee.view`, `finance.invoice.approve`.
+* Owner company (`is_owner = true` di tabel membership) bypass semua permission lewat `Gate::before`.
+* **Anti privilege escalation**: user non-owner hanya boleh memberikan permission yang dia sendiri punya, baik saat menyusun role maupun saat meng-assign role ke user.
+* Role yang masih dipakai user tidak boleh dihapus (409 Conflict).
+* Semua permission memakai `guard_name = 'web'` (default Spatie). Spatie membaca guard dari model User, sehingga tetap jalan untuk request `auth:sanctum`. **Jangan** membuat permission dengan guard `sanctum`.
+
+#### Konfigurasi Spatie (sebelum `migrate` pertama)
+
+Di `config/permission.php`:
+
+```php
+'column_names' => [
+    // ...
+    'team_foreign_key' => 'company_id',
+],
+
+'teams' => true,
+```
+
+Jika migration Spatie sudah terlanjur dijalankan tanpa teams, buat migration baru untuk menambahkan kolom `company_id` ke tabel `roles`, `model_has_roles`, dan `model_has_permissions` (lihat dokumentasi teams Spatie). Jangan edit migration lama yang sudah jalan di production.
+
+#### Middleware tenant (contoh)
+
+Middleware `tenant` wajib menentukan company aktif, memastikan user anggota company tersebut, lalu meng-scope Spatie ke company itu. Contoh di bawah memakai header `X-Company-Id` dan tabel membership `t_company_user_det` (kolom `company_id`, `user_id`, `is_owner`); sesuaikan dengan mekanisme tenant project.
+
+```php
+<?php
+
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+class SetTenantContext
+{
+    public function handle(Request $request, Closure $next): Response
+    {
+        $companyId = (int) $request->header('X-Company-Id');
+
+        $company = $request->user()?->companies()->whereKey($companyId)->first();
+
+        if (! $company) {
+            return response()->forbidden(['Company tidak valid atau Anda bukan anggota company ini']);
+        }
+
+        // Simpan konteks tenant untuk request ini
+        $request->attributes->set('company', $company);
+
+        // Scope role/permission Spatie ke company aktif
+        setPermissionsTeamId($company->id);
+        $request->user()->unsetRelation('roles')->unsetRelation('permissions');
+
+        return $next($request);
+    }
+}
+```
+
+Relasi membership yang dipakai (di model user dan company):
+
+```php
+// Model user
+public function companies(): BelongsToMany
+{
+    return $this->belongsToMany(CompanyModel::class, 't_company_user_det', 'user_id', 'company_id')->withPivot('is_owner');
+}
+
+// Model company
+public function users(): BelongsToMany
+{
+    return $this->belongsToMany(UserModel::class, 't_company_user_det', 'company_id', 'user_id')->withPivot('is_owner');
+}
+```
+
+Owner bypass di `AppServiceProvider::boot()`:
+
+```php
+use App\Helpers\RbacHelpers;
+use Illuminate\Support\Facades\Gate;
+
+Gate::before(function ($user, string $ability) {
+    return RbacHelpers::isOwner(request()) ? true : null;
+});
+```
+
+#### Katalog permission (enum + seeder)
+
+Setiap modul baru wajib menambahkan permission-nya ke enum ini, lalu seeder dijalankan ulang (idempotent, aman di-deploy berkali-kali).
+
+```php
+<?php
+
+namespace App\Enums;
+
+/**
+ * Katalog permission. Permission didefinisikan di kode (bukan dibuat user),
+ * user hanya menyusun role dari permission yang ada di sini.
+ * Format: <modul>.<resource>.<aksi>
+ */
+enum PermissionEnum: string
+{
+    // RBAC
+    case RbacRoleView = 'rbac.role.view';
+    case RbacRoleManage = 'rbac.role.manage';
+    case RbacUserAssign = 'rbac.user.assign';
+
+    // HRIS
+    case HrisEmployeeView = 'hris.employee.view';
+    case HrisEmployeeCreate = 'hris.employee.create';
+    case HrisEmployeeUpdate = 'hris.employee.update';
+    case HrisEmployeeDelete = 'hris.employee.delete';
+
+    public function module(): string
+    {
+        return explode('.', $this->value)[0];
+    }
+}
+```
+
+```php
+<?php
+
+namespace Database\Seeders\Rbac;
+
+use App\Enums\PermissionEnum;
+use Illuminate\Database\Seeder;
+use Spatie\Permission\Models\Permission;
+use Spatie\Permission\PermissionRegistrar;
+
+class PermissionSeeder extends Seeder
+{
+    public function run(): void
+    {
+        foreach (PermissionEnum::cases() as $permission) {
+            Permission::findOrCreate($permission->value, 'web');
+        }
+
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
+    }
+}
+```
+
+#### Helpers RBAC
+
+```php
+<?php
+
+namespace App\Helpers;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Spatie\Permission\Models\Role;
+
+class RbacHelpers
+{
+    /**
+     * Query role milik company aktif saja.
+     */
+    public static function companyRoles(): Builder
+    {
+        return Role::query()->where(config('permission.column_names.team_foreign_key'), getPermissionsTeamId());
+    }
+
+    public static function isOwner(Request $request): bool
+    {
+        return (bool) $request->attributes->get('company')?->pivot?->is_owner;
+    }
+
+    /**
+     * Permission yang diminta tapi tidak dimiliki user (anti privilege escalation).
+     * Owner boleh memberikan semua permission.
+     */
+    public static function permissionsBeyondUser(Request $request, Collection|array $permissionNames): Collection
+    {
+        if (self::isOwner($request)) {
+            return collect();
+        }
+
+        $owned = $request->user()->getAllPermissions()->pluck('name');
+
+        return collect($permissionNames)->diff($owned)->values();
+    }
+}
+```
+
+#### Form Request
+
+```php
+<?php
+
+namespace App\Http\Requests\Rbac;
+
+use App\Helpers\RbacHelpers;
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
+
+class RoleStoreRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        $teamKey = config('permission.column_names.team_foreign_key');
+
+        return [
+            'name' => [
+                'required', 'string', 'max:100',
+                Rule::unique('roles', 'name')
+                    ->where($teamKey, getPermissionsTeamId())
+                    ->where('guard_name', 'web')
+                    ->ignore($this->route('id')),
+            ],
+            'permissions' => ['required', 'array', 'min:1'],
+            'permissions.*' => ['string', 'distinct', Rule::exists('permissions', 'name')->where('guard_name', 'web')],
+        ];
+    }
+
+    public function after(): array
+    {
+        return [
+            function (Validator $validator) {
+                $beyond = RbacHelpers::permissionsBeyondUser($this, $this->input('permissions', []));
+
+                if ($beyond->isNotEmpty()) {
+                    $validator->errors()->add('permissions', 'Anda tidak bisa memberikan permission yang tidak Anda miliki: '.$beyond->implode(', '));
+                }
+            },
+        ];
+    }
+}
+```
+
+```php
+<?php
+
+namespace App\Http\Requests\Rbac;
+
+class RoleUpdateRequest extends RoleStoreRequest
+{
+}
+```
+
+```php
+<?php
+
+namespace App\Http\Requests\Rbac;
+
+use App\Helpers\RbacHelpers;
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
+
+class UserRoleSyncRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        $teamKey = config('permission.column_names.team_foreign_key');
+
+        return [
+            'roles' => ['present', 'array'],
+            'roles.*' => ['integer', 'distinct', Rule::exists('roles', 'id')->where($teamKey, getPermissionsTeamId())],
+        ];
+    }
+
+    public function after(): array
+    {
+        return [
+            function (Validator $validator) {
+                if ($validator->errors()->isNotEmpty()) {
+                    return;
+                }
+
+                $permissions = RbacHelpers::companyRoles()
+                    ->whereKey($this->input('roles', []))
+                    ->with('permissions')
+                    ->get()
+                    ->flatMap(fn ($role) => $role->permissions->pluck('name'))
+                    ->unique();
+
+                $beyond = RbacHelpers::permissionsBeyondUser($this, $permissions);
+
+                if ($beyond->isNotEmpty()) {
+                    $validator->errors()->add('roles', 'Role berisi permission yang tidak Anda miliki: '.$beyond->implode(', '));
+                }
+            },
+        ];
+    }
+}
+```
+
+#### Resource & Controller
+
+```php
+<?php
+
+namespace App\Http\Resources\Api\V1\Rbac;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class RoleResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id' => $this->id,
+            'name' => $this->name,
+            'permissions' => $this->permissions->pluck('name')->sort()->values(),
+        ];
+    }
+}
+```
+
+```php
+<?php
+
+namespace App\Http\Controllers\Api\V1\Rbac;
+
+use App\Http\Controllers\Controller;
+use Illuminate\Support\Str;
+use Spatie\Permission\Models\Permission;
+
+class PermissionController extends Controller
+{
+    /**
+     * Daftar permission yang bisa dipilih saat menyusun role, dikelompokkan per modul.
+     */
+    public function index()
+    {
+        $grouped = Permission::query()
+            ->where('guard_name', 'web')
+            ->orderBy('name')
+            ->pluck('name')
+            ->groupBy(fn (string $name) => Str::before($name, '.'));
+
+        return response()->success($grouped, 'Daftar permission');
+    }
+}
+```
+
+```php
+<?php
+
+namespace App\Http\Controllers\Api\V1\Rbac;
+
+use App\Helpers\RbacHelpers;
+use App\Http\Controllers\Controller;
+use App\Http\Requests\Rbac\RoleStoreRequest;
+use App\Http\Requests\Rbac\RoleUpdateRequest;
+use App\Http\Resources\Api\V1\Rbac\RoleResource;
+use Illuminate\Support\Facades\DB;
+use Spatie\Permission\Models\Role;
+
+class RoleController extends Controller
+{
+    public function index()
+    {
+        $roles = RbacHelpers::companyRoles()->with('permissions')->orderBy('name')->get();
+
+        return response()->success(RoleResource::collection($roles), 'Daftar role');
+    }
+
+    public function show(string $id)
+    {
+        $role = RbacHelpers::companyRoles()->with('permissions')->findOrFail($id);
+
+        return response()->success(new RoleResource($role), 'Detail role');
+    }
+
+    public function store(RoleStoreRequest $request)
+    {
+        $data = $request->validated();
+
+        $role = DB::transaction(function () use ($data) {
+            $role = Role::create(['name' => $data['name'], 'guard_name' => 'web']); // company_id otomatis dari team aktif
+            $role->syncPermissions($data['permissions']);
+
+            return $role;
+        });
+
+        return response()->created(new RoleResource($role->load('permissions')), 'Role berhasil dibuat');
+    }
+
+    public function update(RoleUpdateRequest $request, string $id)
+    {
+        $role = RbacHelpers::companyRoles()->findOrFail($id);
+        $data = $request->validated();
+
+        DB::transaction(function () use ($role, $data) {
+            $role->update(['name' => $data['name']]);
+            $role->syncPermissions($data['permissions']);
+        });
+
+        return response()->success(new RoleResource($role->load('permissions')), 'Role berhasil diubah');
+    }
+
+    public function destroy(string $id)
+    {
+        $role = RbacHelpers::companyRoles()->findOrFail($id);
+
+        if ($role->users()->exists()) {
+            return response()->conflict(['Role masih dipakai user, lepas dulu dari user sebelum dihapus']);
+        }
+
+        $role->delete();
+
+        return response()->success([], 'Role berhasil dihapus');
+    }
+}
+```
+
+```php
+<?php
+
+namespace App\Http\Controllers\Api\V1\Rbac;
+
+use App\Helpers\RbacHelpers;
+use App\Http\Controllers\Controller;
+use App\Http\Requests\Rbac\UserRoleSyncRequest;
+use App\Http\Resources\Api\V1\Rbac\RoleResource;
+
+class UserRoleController extends Controller
+{
+    /**
+     * Ganti seluruh role user di company aktif (sync).
+     */
+    public function update(UserRoleSyncRequest $request, string $userId)
+    {
+        $user = $request->attributes->get('company')->users()->findOrFail($userId); // hanya anggota company aktif
+
+        $roles = RbacHelpers::companyRoles()->whereKey($request->validated('roles'))->get();
+        $user->syncRoles($roles);
+
+        return response()->success(RoleResource::collection($user->roles()->with('permissions')->get()), 'Role user berhasil diperbarui');
+    }
+}
+```
+
+#### Routes
+
+```php
+<?php
+
+use App\Http\Controllers\Api\V1\Rbac\PermissionController;
+use App\Http\Controllers\Api\V1\Rbac\RoleController;
+use App\Http\Controllers\Api\V1\Rbac\UserRoleController;
+use Illuminate\Support\Facades\Route;
+
+Route::prefix('v1')->middleware(['auth:sanctum', 'tenant'])->group(function () {
+    Route::prefix('rbac')->group(function () {
+        Route::get('permissions', [PermissionController::class, 'index'])->middleware('permission:rbac.role.view');
+        Route::get('roles', [RoleController::class, 'index'])->middleware('permission:rbac.role.view');
+        Route::get('roles/{id}', [RoleController::class, 'show'])->middleware('permission:rbac.role.view');
+        Route::post('roles', [RoleController::class, 'store'])->middleware('permission:rbac.role.manage');
+        Route::put('roles/{id}', [RoleController::class, 'update'])->middleware('permission:rbac.role.manage');
+        Route::delete('roles/{id}', [RoleController::class, 'destroy'])->middleware('permission:rbac.role.manage');
+        Route::put('users/{userId}/roles', [UserRoleController::class, 'update'])->middleware('permission:rbac.user.assign');
+    });
+});
+```
+
+Kontrak endpoint:
+
+| Method | Endpoint | Permission | Body |
+|---|---|---|---|
+| GET | `/api/v1/rbac/permissions` | `rbac.role.view` | - |
+| GET | `/api/v1/rbac/roles` | `rbac.role.view` | - |
+| GET | `/api/v1/rbac/roles/{id}` | `rbac.role.view` | - |
+| POST | `/api/v1/rbac/roles` | `rbac.role.manage` | `{"name": "Staff HR", "permissions": ["hris.employee.view"]}` |
+| PUT | `/api/v1/rbac/roles/{id}` | `rbac.role.manage` | sama dengan POST (permission di-sync penuh) |
+| DELETE | `/api/v1/rbac/roles/{id}` | `rbac.role.manage` | - (409 jika role masih dipakai) |
+| PUT | `/api/v1/rbac/users/{userId}/roles` | `rbac.user.assign` | `{"roles": [3, 5]}` (sync penuh, `[]` untuk melepas semua) |
+
+Semua request wajib header `Authorization: Bearer <token>` dan `X-Company-Id: <id>` (atau mekanisme tenant project).
+
+Checklist test RBAC (wajib ada di `tests/Feature/Rbac/`):
+
+* Dua role dengan permission berbeda: user A (role 1) hanya bisa view, user B (role 2) bisa view + create.
+* Mengubah permission role langsung berlaku untuk user yang memegang role itu.
+* Role company A tidak bisa dilihat/diubah/di-assign dari company B (404/422), nama role sama boleh di company berbeda, duplikat di company sama ditolak (422).
+* User non-owner tidak bisa memberi permission yang tidak dia punya (422).
+* Permission di luar katalog ditolak (422).
+* Role yang masih dipakai tidak bisa dihapus (409).
+* 403 dari middleware `permission:` memakai format response macro.
 
 ---
 
@@ -1440,9 +2037,13 @@ Setiap fitur memiliki **folder sendiri** di:
 
 ```
 app/
+├── Enums/
+│   └── PermissionEnum.php          # katalog permission
+│
 ├── Helpers/
 │   ├── KategoriHelpers.php
-│   └── PostHelpers.php
+│   ├── PostHelpers.php
+│   └── RbacHelpers.php
 │
 ├── Models/
 │   ├── Concerns/
@@ -1508,6 +2109,8 @@ resources/
 │
 database/
 └── seeders/
+    ├── Rbac/
+    │   └── PermissionSeeder.php
     └── Post/
         ├── PostSeeder.php
         └── DetailPostSeeder.php
@@ -1623,6 +2226,8 @@ DetailPostResource
 | Nama tabel di Model | Wajib eksplisit: `#[Table('m_xxxx')]` (L13) / `$table` (L12) |
 | Middleware & Exception | Didaftarkan di `bootstrap/app.php` |
 | N+1 guard       | `Model::preventLazyLoading()` di `AppServiceProvider` |
+| RBAC            | Spatie teams (`company_id`), permission dari enum, role dibuat user via `/api/v1/rbac/roles` |
+| Install package | Wajib konfirmasi user dulu (0.1), command non-interaktif (0.2) |
 | Realtime        | Reverb, private channel `company.{id}.<modul>...`, event suffix `Event` |
 | AI              | Laravel AI SDK, `app/Ai/Agents` suffix `Agent`, structured output, fake di test |
 | Excel           | Laravel Excel 4 (typed), `app/Exports` / `app/Imports`, queued untuk data besar |
